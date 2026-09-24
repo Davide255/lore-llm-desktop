@@ -1,0 +1,63 @@
+/* Page-level CSS that React Native styles can't express. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: #121211;
+  color: #faf9f5;
+  overflow: hidden;
+}
+body {
+  -webkit-font-smoothing: antialiased;
+  font-family: -apple-system, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+}
+#root {
+  display: flex;
+}
+::selection {
+  background: rgba(143, 92, 255, 0.35);
+}
+textarea::selection {
+  /* The editor's textarea text is transparent; keep the selection visible. */
+  background: rgba(143, 92, 255, 0.35);
+  color: transparent;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(250, 249, 245, 0.14) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(250, 249, 245, 0.12);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(250, 249, 245, 0.22);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::placeholder {
+  color: rgba(250, 249, 245, 0.38);
+}
+.material-symbols-rounded {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+@keyframes lore-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes lore-pop {
+  from { opacity: 0; transform: translateY(4px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes lore-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}

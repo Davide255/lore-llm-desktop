@@ -1,0 +1,56 @@
+{
+  "name": "lore-llm-desktop",
+  "productName": "Lore LLM Desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop editor for the knowledge base shared between you and your agents.",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron -c magenta,blue \"vite\" \"wait-on tcp:5173 && cross-env LORE_DEV_URL=http://localhost:5173 electron .\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/kb/*.test.ts",
+    "dist": "npm run build && electron-builder"
+  },
+  "build": {
+    "appId": "it.athly.lore",
+    "productName": "Lore LLM Desktop",
+    "files": [
+      "dist/**",
+      "electron/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity"
+    }
+  },
+  "dependencies": {
+    "diff": "^8.0.4",
+    "marked": "^16.4.2",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native-web": "^0.21.2"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1",
+    "@types/react-dom": "~19.1",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "cross-env": "^10.1.0",
+    "electron": "^38.8.6",
+    "electron-builder": "^26.15.3",
+    "material-symbols": "^0.47.5",
+    "react-native": "^0.81.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.1",
+    "wait-on": "^9.1.0"
+  }
+}
