@@ -1,5 +1,14 @@
 export type Author = 'you' | 'agent';
 
+export type AgentKind = 'claude' | 'codex';
+
+/** Identity snapshot of the agent behind a change. `kind` is null once the agent is revoked and unknown. */
+export interface AgentRef {
+  id: string;
+  name: string;
+  kind: AgentKind | null;
+}
+
 export interface FileNode {
   kind: 'file';
   name: string;
@@ -7,6 +16,8 @@ export interface FileNode {
   mtime: number;
   size: number;
   author: Author;
+  /** The agent that wrote the current version (when author is 'agent' and the audit log knows). */
+  agent?: AgentRef;
   /** checklist.md only */
   done?: number;
   total?: number;
@@ -32,6 +43,7 @@ export interface FileContent {
   size: number;
   birthtime: number;
   author: Author;
+  agent?: AgentRef;
 }
 
 export interface SearchHit {
@@ -61,6 +73,7 @@ export interface ActivityEvent {
   path: string;
   kind: 'created' | 'modified' | 'deleted';
   by: Author;
+  agent?: AgentRef;
   added: number;
   removed: number;
   hunks: DiffHunk[];
@@ -70,14 +83,33 @@ export interface ActivityEvent {
 
 export type Permission = 'read' | 'write';
 
+/** An agent registered on the Lore server (its token is shown only at creation). */
 export interface Agent {
   id: string;
+  /** Friendly name chosen by the user. */
   name: string;
+  kind: AgentKind;
   permission: Permission;
-  /** Project folder names, or ['*'] for every project. */
+  /** Project names, or ['*'] for every project. */
   scope: string[];
-  active: boolean;
-  lastAccess?: number;
+  createdAt: number;
+}
+
+export interface NewAgent {
+  agent: Agent;
+  /** Bearer token for the MCP endpoint — not stored anywhere, shown once. */
+  token: string;
+  expiresAt: number;
+  mcpUrl: string;
+}
+
+/** A file modification made by an agent, from the server's audit log. */
+export interface AuditItem {
+  id: number;
+  at: number;
+  agent?: AgentRef;
+  action: 'CREATE' | 'UPDATE' | 'DELETE';
+  path: string;
 }
 
 export interface Prefs {
@@ -86,12 +118,17 @@ export interface Prefs {
   sidebarCollapsed?: boolean;
 }
 
+/** Signed-in Google account (via Cognito). Tokens stay in the main process. */
+export interface AuthUser {
+  id: string;
+  name: string;
+  email: string | null;
+}
+
 /** The bridge the Electron preload exposes. A react-native-windows/macos
  *  target would implement this same interface with a native module. */
 export interface LoreBridge {
-  getRoot(): Promise<string | null>;
-  chooseRoot(): Promise<string | null>;
-  tree(): Promise<TreeNode[]>;
+  tree(fresh?: boolean): Promise<TreeNode[]>;
   read(path: string): Promise<FileContent>;
   write(path: string, content: string): Promise<boolean>;
   create(path: string, content: string): Promise<boolean>;
@@ -104,15 +141,23 @@ export interface LoreBridge {
   activity(): Promise<ActivityEvent[]>;
   markActivitySeen(): Promise<number>;
   lastSeenActivity(): Promise<number>;
-  readMeta<T>(name: string): Promise<T | null>;
-  writeMeta(name: string, data: unknown): Promise<boolean>;
+  agents(): Promise<Agent[]>;
+  createAgent(a: { kind: AgentKind; name: string; permission: Permission; scope: string[]; days?: number }): Promise<NewAgent>;
+  updateAgent(id: string, patch: Partial<Pick<Agent, 'name' | 'kind' | 'permission' | 'scope'>>): Promise<boolean>;
+  deleteAgent(id: string): Promise<boolean>;
+  audit(opts?: { limit?: number; before?: number }): Promise<{ items: AuditItem[]; nextBefore: number | null }>;
+  /** Host of the Lore server the app talks to. */
+  server(): Promise<string>;
   prefs(): Promise<Prefs>;
   setPrefs(p: Prefs): Promise<Prefs>;
-  reveal(path: string): Promise<void>;
   copy(text: string): Promise<void>;
-  absPath(path: string): Promise<string>;
   platform(): Promise<string>;
   confirmClose(): Promise<void>;
+  authUser(): Promise<AuthUser | null>;
+  signIn(): Promise<AuthUser | null>;
+  cancelSignIn(): Promise<void>;
+  signOut(): Promise<void>;
+  onAuthChanged(cb: (user: AuthUser | null) => void): () => void;
   onChanged(cb: (ev: { paths: string[]; external: boolean }) => void): () => void;
   onActivity(cb: (ev: ActivityEvent) => void): () => void;
   onCloseRequested(cb: () => void): () => void;

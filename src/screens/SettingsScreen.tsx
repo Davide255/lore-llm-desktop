@@ -1,13 +1,17 @@
 import React, { useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
-import { c, font, radius, t } from '../theme';
+import { c, font, radius, t, web } from '../theme';
 import { useApp, type SettingsSection } from '../state/app';
 import { allFiles, projects, relTime } from '../kb/paths';
-import type { Agent } from '../kb/types';
+import { lore } from '../kb/bridge';
+import type { Agent, AgentKind, NewAgent, Permission } from '../kb/types';
+import { AGENT_KIND_LIST, AGENT_KINDS } from '../kb/agents';
+import { AgentAvatar } from '../ui/identity';
 import { Avatar, Btn, Card, Field, FieldLabel, Hover, Icon, IconWell, Kbd, Segmented, Toggle } from '../ui/primitives';
 import { DialogFooter, DialogFrame, DialogTitle, anchorBelow } from '../ui/overlays';
 
 const SECTIONS: { key: SettingsSection; icon: string; label: string }[] = [
+  { key: 'account', icon: 'account_circle', label: 'Account' },
   { key: 'general', icon: 'tune', label: 'Generale' },
   { key: 'editor', icon: 'edit_note', label: 'Editor' },
   { key: 'agents', icon: 'smart_toy', label: 'Agenti' },
@@ -35,7 +39,7 @@ export function SettingsScreen({ section = 'general' }: { section?: SettingsSect
         })}
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 34, paddingHorizontal: 44, gap: 22, maxWidth: 1000 }}>
-        {section === 'general' ? <General /> : section === 'editor' ? <EditorPrefs /> : section === 'agents' ? <Agents /> : <Shortcuts />}
+        {section === 'account' ? <Account /> : section === 'general' ? <General /> : section === 'editor' ? <EditorPrefs /> : section === 'agents' ? <Agents /> : <Shortcuts />}
       </ScrollView>
     </View>
   );
@@ -53,27 +57,57 @@ function Header({ title, body, action }: { title: string; body: string; action?:
   );
 }
 
+function Account() {
+  const app = useApp();
+  const { user } = app;
+  return (
+    <>
+      <Header title="Account" body="La knowledge base è legata al tuo account: ogni account ha la sua." />
+      {user ? (
+        <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+          <Avatar name={user.name} size={34} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text numberOfLines={1} style={t(500, 14, 1.3)}>
+              {user.name}
+            </Text>
+            <Text numberOfLines={1} style={t(400, 12.5, 1.4, { color: c.ink3, marginTop: 3 })}>
+              {user.email ?? 'Account Google'}
+            </Text>
+          </View>
+          <Btn icon="logout" label="Esci" onPress={app.signOut} />
+        </Card>
+      ) : null}
+    </>
+  );
+}
+
 function General() {
   const app = useApp();
   const files = allFiles(app.tree).length;
   return (
     <>
-      <Header title="Generale" body="La knowledge base è una cartella: ogni sottocartella è un progetto." />
+      <Header title="Generale" body="La knowledge base vive sul server Lore: ogni progetto è una cartella, condivisa con i tuoi agenti." />
       <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-        <IconWell icon="folder" tint="blue" />
+        <IconWell icon="cloud" tint="blue" />
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={t(500, 14, 1.3)}>Cartella della knowledge base</Text>
+          <Text style={t(500, 14, 1.3)}>Server della knowledge base</Text>
           <Text numberOfLines={1} style={{ fontFamily: font.mono, fontSize: 12.5, color: c.ink3, marginTop: 4 }}>
-            {app.root ?? 'Nessuna cartella selezionata'}
+            {app.server}
           </Text>
-          {app.root ? (
-            <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 4 })}>
-              {projects(app.tree).length} progetti · {files} file .md
-            </Text>
-          ) : null}
+          <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 4 })}>
+            {projects(app.tree).length} progetti · {files} file .md
+          </Text>
         </View>
-        {app.root ? <Btn icon="folder_open" label="Mostra" onPress={() => app.ops.reveal('')} /> : null}
-        <Btn variant="primary" label={app.root ? 'Cambia cartella' : 'Scegli cartella'} onPress={app.chooseRoot} />
+        <Btn
+          icon="refresh"
+          label="Aggiorna"
+          onPress={() =>
+            lore
+              .tree(true)
+              .then(() => app.refresh())
+              .catch(() => {})
+          }
+        />
       </Card>
       <Card style={{ gap: 10 }}>
         <Text style={t(500, 14, 1.3)}>File speciali</Text>
@@ -134,8 +168,11 @@ function EditorPrefs() {
 function Agents() {
   const app = useApp();
   const [adding, setAdding] = useState(false);
-  const update = (id: string, patch: Partial<Agent>) => app.saveAgents(app.agents.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+  const [created, setCreated] = useState<NewAgent | null>(null);
+  const [revoking, setRevoking] = useState<Agent | null>(null);
+  const update = (id: string, patch: Partial<Pick<Agent, 'permission' | 'scope'>>) => app.updateAgent(id, patch);
   const names = projects(app.tree).map((p) => p.name);
+  const lastWrite = (id: string) => app.audit.find((i) => i.agent?.id === id)?.at;
 
   return (
     <>
@@ -145,17 +182,23 @@ function Agents() {
           <Text style={[head, { flex: 1 }]}>Agente</Text>
           <Text style={[head, { width: 170 }]}>Permessi</Text>
           <Text style={[head, { width: 160 }]}>Progetti</Text>
-          <Text style={[head, { width: 100 }]}>Ultimo accesso</Text>
-          <Text style={[head, { width: 50 }]}>Attivo</Text>
+          <Text style={[head, { width: 140 }]}>Ultima scrittura</Text>
           <View style={{ width: 24 }} />
         </View>
         {app.agents.map((a) => (
           <View key={a.id} style={[rowStyle, { height: 58 }]}>
             <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 0 }}>
-              <Avatar name={a.name} size={28} />
-              <Text numberOfLines={1} style={[t(500, 13.5, 1.2), { flexShrink: 1 }]}>
-                {a.name}
-              </Text>
+              <AgentAvatar agent={a} size={30} />
+              <View style={{ flexShrink: 1, minWidth: 0 }}>
+                <Text numberOfLines={1} style={t(500, 13.5, 1.2)}>
+                  {a.name}
+                </Text>
+                {a.name !== AGENT_KINDS[a.kind].label ? (
+                  <Text numberOfLines={1} style={t(400, 11.5, 1.2, { color: c.ink3, marginTop: 2 })}>
+                    {AGENT_KINDS[a.kind].label}
+                  </Text>
+                ) : null}
+              </View>
             </View>
             <View style={{ width: 170 }}>
               <Select
@@ -183,13 +226,10 @@ function Agents() {
                 ]}
               />
             </View>
-            <Text style={[t(400, 13.5, 1, { color: c.ink3 }), { width: 100 }]}>{a.lastAccess ? relTime(a.lastAccess) : '—'}</Text>
-            <View style={{ width: 50 }}>
-              <Toggle value={a.active} onChange={(v) => update(a.id, { active: v })} />
-            </View>
+            <Text style={[t(400, 13.5, 1, { color: c.ink3 }), { width: 140 }]}>{lastWrite(a.id) ? relTime(lastWrite(a.id)!) : '—'}</Text>
             <Hover
-              onPress={() => app.saveAgents(app.agents.filter((x) => x.id !== a.id))}
-              accessibilityLabel="Rimuovi"
+              onPress={() => setRevoking(a)}
+              accessibilityLabel="Revoca"
               style={({ hovered }) => ({ width: 24, height: 24, borderRadius: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: hovered ? c.error13 : 'transparent' })}
             >
               <Icon name="close" size={15} color={c.ink3} />
@@ -206,17 +246,143 @@ function Agents() {
         <IconWell icon="info" tint="info" />
         <View style={{ flex: 1 }}>
           <Text style={t(500, 14, 1.3)}>
-            Salvato in <Text style={{ fontFamily: font.mono }}>.lore/agents.json</Text>
+            Gli agenti si collegano a <Text style={{ fontFamily: font.mono }}>{app.server}/mcp</Text>
           </Text>
           <Text style={t(400, 12, 1.45, { color: c.ink3, marginTop: 3 })}>
-            Il file vive nella knowledge base, così il server MCP degli agenti può leggerlo e applicare permessi e ambito. L’app registra ogni scrittura esterna in Attività.
+            Ogni agente ha il suo token: il server applica permessi e progetti a ogni chiamata. Revocarlo lo blocca subito.
           </Text>
         </View>
       </Card>
-      {adding ? <AddAgentDialog onClose={() => setAdding(false)} /> : null}
+      <AuditLog />
+      {adding ? (
+        <AddAgentDialog
+          onClose={() => setAdding(false)}
+          onCreated={(res) => {
+            setAdding(false);
+            setCreated(res);
+          }}
+        />
+      ) : null}
+      {created ? <TokenDialog created={created} onClose={() => setCreated(null)} /> : null}
+      {revoking ? <RevokeDialog agent={revoking} onClose={() => setRevoking(null)} /> : null}
     </>
   );
 }
+
+const ACTION_LABEL = { CREATE: 'creato', UPDATE: 'modificato', DELETE: 'eliminato' } as const;
+
+/** Server-side audit: every file an agent created, changed or deleted. */
+function AuditLog() {
+  const app = useApp();
+  return (
+    <View style={{ gap: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <Text style={[t(600, 15, 1.2), { flex: 1 }]}>Registro delle modifiche</Text>
+        <Btn icon="refresh" label="Aggiorna" onPress={() => app.loadAudit().catch(() => {})} />
+      </View>
+      <View style={{ borderWidth: 1, borderColor: c.hair, borderRadius: radius.card, overflow: 'hidden' }}>
+        {app.audit.map((i, n) => (
+          <View key={i.id} style={[rowStyle, { height: 40, borderTopWidth: n ? 1 : 0 }]}>
+            <Text style={[t(400, 12.5, 1, { color: c.ink3 }), { width: 90 }]}>{relTime(i.at)}</Text>
+            <View style={{ width: 160, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <AgentAvatar agent={i.agent} size={20} />
+              <Text numberOfLines={1} style={[t(500, 13, 1), { flexShrink: 1 }]}>
+                {i.agent?.name ?? 'Agente revocato'}
+              </Text>
+            </View>
+            <Text style={[t(400, 12.5, 1, { color: i.action === 'DELETE' ? c.error : c.ink2 }), { width: 80 }]}>{ACTION_LABEL[i.action]}</Text>
+            <Text numberOfLines={1} style={{ flex: 1, fontFamily: font.mono, fontSize: 12.5, color: c.ink2 }}>
+              {i.path}
+            </Text>
+          </View>
+        ))}
+        {!app.audit.length ? (
+          <View style={{ padding: 20, alignItems: 'center' }}>
+            <Text style={t(400, 13, 1.5, { color: c.ink3 })}>Nessuna modifica degli agenti finora.</Text>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+/** The token exists only in this dialog: the server keeps no copy. */
+function TokenDialog({ created, onClose }: { created: NewAgent; onClose: () => void }) {
+  const app = useApp();
+  const setup =
+    created.agent.kind === 'codex'
+      ? {
+          label: 'Codex · ~/.codex/config.toml',
+          text: `[mcp_servers.lore]\nurl = "${created.mcpUrl}"\nhttp_headers = { Authorization = "Bearer ${created.token}" }`,
+        }
+      : { label: 'Claude Code', text: `claude mcp add --transport http lore ${created.mcpUrl} --header "Authorization: Bearer ${created.token}"` };
+  const copy = async (text: string, what: string) => {
+    await lore.copy(text);
+    app.toast({ icon: 'content_copy', text: `${what} copiato negli appunti` });
+  };
+  return (
+    <DialogFrame width={600} onDismiss={onClose} onSubmit={onClose}>
+      <DialogTitle onClose={onClose}>{`${created.agent.name} è collegato`}</DialogTitle>
+      <View style={{ paddingTop: 12, paddingHorizontal: 24, paddingBottom: 22, gap: 16 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <AgentAvatar agent={created.agent} size={32} />
+          <View>
+            <Text style={t(500, 14, 1.3)}>{created.agent.name}</Text>
+            <Text style={t(400, 12, 1.3, { color: c.ink3 })}>
+              {AGENT_KINDS[created.agent.kind].label} · {created.agent.permission === 'write' ? 'lettura e scrittura' : 'sola lettura'}
+            </Text>
+          </View>
+        </View>
+        <Text style={t(400, 13, 1.5, { color: c.ink2 })}>
+          Copia ora il token: non verrà più mostrato. Scade il {new Date(created.expiresAt).toLocaleDateString('it-IT')}.
+        </Text>
+        <View>
+          <FieldLabel>Token</FieldLabel>
+          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+            <Text selectable numberOfLines={1} style={[codeBox, { flex: 1, minWidth: 0 }]}>
+              {created.token}
+            </Text>
+            <Btn icon="content_copy" label="Copia" onPress={() => copy(created.token, 'Token')} />
+          </View>
+        </View>
+        <View>
+          <FieldLabel>{setup.label}</FieldLabel>
+          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
+            <Text selectable style={[codeBox, { flex: 1, minWidth: 0 }, web({ wordBreak: 'break-all', whiteSpace: 'pre-wrap' })]}>
+              {setup.text}
+            </Text>
+            <Btn icon="content_copy" label="Copia" onPress={() => copy(setup.text, 'Configurazione')} />
+          </View>
+        </View>
+      </View>
+      <DialogFooter>
+        <Btn variant="primary" label="Fatto" kbd="⏎" onPress={onClose} />
+      </DialogFooter>
+    </DialogFrame>
+  );
+}
+
+function RevokeDialog({ agent, onClose }: { agent: Agent; onClose: () => void }) {
+  const app = useApp();
+  const submit = () => {
+    app.deleteAgent(agent.id);
+    onClose();
+  };
+  return (
+    <DialogFrame width={440} onDismiss={onClose} onSubmit={submit}>
+      <DialogTitle onClose={onClose}>{`Revocare ${agent.name}?`}</DialogTitle>
+      <View style={{ paddingTop: 8, paddingHorizontal: 24, paddingBottom: 22 }}>
+        <Text style={t(400, 13, 1.5, { color: c.ink2 })}>Il suo token smette subito di funzionare. Le sue modifiche restano nel registro.</Text>
+      </View>
+      <DialogFooter>
+        <Btn label="Annulla" onPress={onClose} />
+        <Btn variant="danger" label="Revoca" kbd="⏎" onPress={submit} />
+      </DialogFooter>
+    </DialogFrame>
+  );
+}
+
+const codeBox = { fontFamily: font.mono, fontSize: 12, lineHeight: 17, color: c.ink, backgroundColor: c.fill06, borderWidth: 1, borderColor: c.hair, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 7 } as const;
 
 function Select({ label, options }: { label: string; options: { label: string; checked: boolean; onPress: () => void }[] }) {
   const app = useApp();
@@ -239,22 +405,38 @@ function Select({ label, options }: { label: string; options: { label: string; c
   );
 }
 
-function AddAgentDialog({ onClose }: { onClose: () => void }) {
+/** Pick the client, give it a friendly name, choose what it may do. */
+function AddAgentDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (res: NewAgent) => void }) {
   const app = useApp();
+  const [kind, setKind] = useState<AgentKind>('claude');
   const [name, setName] = useState('');
-  const [perm, setPerm] = useState<'read' | 'write'>('write');
-  const submit = () => {
-    if (!name.trim()) return;
-    app.saveAgents([...app.agents, { id: `${Date.now().toString(36)}`, name: name.trim(), permission: perm, scope: ['*'], active: true }]);
-    onClose();
+  const [perm, setPerm] = useState<Permission>('write');
+  const [busy, setBusy] = useState(false);
+  // An empty name falls back to the client's name ("Claude", "Codex").
+  const finalName = name.trim() || AGENT_KINDS[kind].label;
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    const res = await app.createAgent({ kind, name: finalName, permission: perm, scope: ['*'] });
+    setBusy(false);
+    if (res) onCreated(res);
   };
   return (
-    <DialogFrame width={460} onDismiss={onClose} onSubmit={submit}>
+    <DialogFrame width={540} onDismiss={onClose} onSubmit={submit}>
       <DialogTitle onClose={onClose}>Collega un agente</DialogTitle>
       <View style={{ paddingTop: 12, paddingHorizontal: 24, paddingBottom: 22, gap: 18 }}>
         <View>
+          <FieldLabel>Tipo di agente</FieldLabel>
+          <View role="radiogroup" style={{ flexDirection: 'row', gap: 10 }}>
+            {AGENT_KIND_LIST.map((k) => (
+              <KindOption key={k} kind={k} on={k === kind} onPress={() => setKind(k)} />
+            ))}
+          </View>
+        </View>
+        <View>
           <FieldLabel>Nome</FieldLabel>
-          <Field autoFocus value={name} onChangeText={setName} placeholder="Claude, Codex, GPT Desktop…" />
+          <Field autoFocus value={name} onChangeText={setName} placeholder={`${AGENT_KINDS[kind].label} (es. “${AGENT_KINDS[kind].label} lavoro”)`} />
+          <Text style={t(400, 11.5, 1.4, { color: c.ink3, marginTop: 6 })}>Il nome con cui l’agente compare in Attività e nel registro.</Text>
         </View>
         <View>
           <FieldLabel>Permessi</FieldLabel>
@@ -270,9 +452,40 @@ function AddAgentDialog({ onClose }: { onClose: () => void }) {
       </View>
       <DialogFooter>
         <Btn label="Annulla" onPress={onClose} />
-        <Btn variant="primary" label="Collega" kbd="⏎" onPress={submit} disabled={!name.trim()} />
+        <Btn variant="primary" label={busy ? 'Collego…' : `Collega ${finalName}`} kbd="⏎" onPress={submit} disabled={busy} />
       </DialogFooter>
     </DialogFrame>
+  );
+}
+
+function KindOption({ kind, on, onPress }: { kind: AgentKind; on: boolean; onPress: () => void }) {
+  return (
+    <Hover
+      role="radio"
+      aria-checked={on}
+      aria-label={AGENT_KINDS[kind].label}
+      onPress={onPress}
+      style={({ hovered }) => ({
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        padding: 12,
+        borderRadius: radius.lg,
+        borderWidth: 1.5,
+        borderColor: on ? c.purple : c.hair,
+        backgroundColor: on ? c.purple14 : hovered ? c.fill05 : c.fill04,
+      })}
+    >
+      <AgentAvatar kind={kind} size={34} />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={t(600, 14, 1.2)}>{AGENT_KINDS[kind].label}</Text>
+        <Text numberOfLines={2} style={t(400, 11.5, 1.35, { color: c.ink3, marginTop: 2 })}>
+          {AGENT_KINDS[kind].hint}
+        </Text>
+      </View>
+      <Icon name={on ? 'radio_button_checked' : 'radio_button_unchecked'} size={18} color={on ? c.purpleTint : c.ink3} />
+    </Hover>
   );
 }
 

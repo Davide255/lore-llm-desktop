@@ -4,7 +4,7 @@ import { c, font, t, web } from '../theme';
 import { useApp, type Route } from '../state/app';
 import { Hover, Icon, isMac } from '../ui/primitives';
 
-const SETTINGS_LABEL = { general: 'Generale', editor: 'Editor', agents: 'Agenti', shortcuts: 'Scorciatoie' } as const;
+const SETTINGS_LABEL = { account: 'Account', general: 'Generale', editor: 'Editor', agents: 'Agenti', shortcuts: 'Scorciatoie' } as const;
 
 function crumbs(route: Route): { label: string; mono?: boolean; to?: Route }[] {
   switch (route.name) {
@@ -30,7 +30,9 @@ function crumbs(route: Route): { label: string; mono?: boolean; to?: Route }[] {
 
 export function TitleBar() {
   const app = useApp();
-  const list = crumbs(app.route);
+  // Before login there is no knowledge base: no sidebar toggle, breadcrumbs or sync state.
+  const inside = !!app.user && app.loaded;
+  const list = inside ? crumbs(app.route) : [{ label: 'Lore LLM Desktop' }];
   const sync = {
     synced: { icon: 'cloud_done', label: 'Sincronizzato', color: c.ink3 },
     saving: { icon: 'sync', label: 'Salvataggio…', color: c.ink3 },
@@ -45,14 +47,18 @@ export function TitleBar() {
         web({ WebkitAppRegion: 'drag', userSelect: 'none' }),
       ]}
     >
-      <Hover
-        onPress={() => app.setPrefs({ sidebarCollapsed: !app.prefs.sidebarCollapsed })}
-        style={({ hovered }) => [{ padding: 4, borderRadius: 6, backgroundColor: hovered ? c.fill07 : 'transparent' }, web({ WebkitAppRegion: 'no-drag' })]}
-        accessibilityLabel="Mostra/nascondi sidebar"
-      >
-        <Icon name="side_navigation" size={18} color={c.ink3} />
-      </Hover>
-      <View style={{ width: 4 }} />
+      {inside ? (
+        <>
+          <Hover
+            onPress={() => app.setPrefs({ sidebarCollapsed: !app.prefs.sidebarCollapsed })}
+            style={({ hovered }) => [{ padding: 4, borderRadius: 6, backgroundColor: hovered ? c.fill07 : 'transparent' }, web({ WebkitAppRegion: 'no-drag' })]}
+            accessibilityLabel="Mostra/nascondi sidebar"
+          >
+            <Icon name="side_navigation" size={18} color={c.ink3} />
+          </Hover>
+          <View style={{ width: 4 }} />
+        </>
+      ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 1, minWidth: 0 }}>
         {list.map((cr, i) => {
           const last = i === list.length - 1;
@@ -74,8 +80,12 @@ export function TitleBar() {
         })}
       </View>
       <View style={{ flex: 1 }} />
-      <Icon name={sync.icon} size={17} color={sync.color} />
-      <Text style={t(400, 12, 1, { color: sync.color })}>{sync.label}</Text>
+      {inside ? (
+        <>
+          <Icon name={sync.icon} size={17} color={sync.color} />
+          <Text style={t(400, 12, 1, { color: sync.color })}>{sync.label}</Text>
+        </>
+      ) : null}
     </View>
   );
 }

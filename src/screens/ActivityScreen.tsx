@@ -4,7 +4,8 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { basename, findNode, projectOf, relTime } from '../kb/paths';
 import type { ActivityEvent } from '../kb/types';
-import { Avatar, Btn, FilterPill, Hover, Pill } from '../ui/primitives';
+import { Btn, FilterPill, Hover, Pill } from '../ui/primitives';
+import { AuthorAvatar } from '../ui/identity';
 import { EmptyState } from './common';
 
 type Filter = 'all' | 'agent' | 'you';
@@ -18,7 +19,11 @@ function dayLabel(ms: number) {
   return d.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
-const verb = (e: ActivityEvent) => (e.kind === 'created' ? 'Ha creato' : e.kind === 'deleted' ? 'Ha eliminato' : 'Ha modificato');
+// "Claude ha creato" / "Hai creato": every row says who did it.
+const verb = (e: ActivityEvent) => {
+  const v = e.kind === 'created' ? 'creato' : e.kind === 'deleted' ? 'eliminato' : 'modificato';
+  return e.by === 'you' ? `Hai ${v}` : `${e.agent?.name ?? 'Un agente'} ha ${v}`;
+};
 
 export function ActivityScreen({ id }: { id?: string }) {
   const app = useApp();
@@ -79,7 +84,7 @@ export function ActivityScreen({ id }: { id?: string }) {
 function EventRow({ e, on, onPress }: { e: ActivityEvent; on: boolean; onPress: () => void }) {
   return (
     <Hover onPress={onPress} style={({ hovered }) => ({ flexDirection: 'row', gap: 12, alignItems: 'flex-start', padding: 12, borderRadius: radius.lg, backgroundColor: on ? c.purple14 : hovered ? c.fill04 : 'transparent' })}>
-      {e.by === 'you' ? <Avatar initials="TU" size={30} /> : <Avatar initials="AG" size={30} color={c.purple} />}
+      <AuthorAvatar author={e.by} agent={e.agent} size={30} />
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text numberOfLines={1} style={t(500, 13.5, 1.35)}>
           {verb(e)} <Text style={{ fontFamily: font.mono }}>{basename(e.path)}</Text>
@@ -159,9 +164,9 @@ function EventDetail({ e }: { e: ActivityEvent }) {
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 24, paddingHorizontal: 28, gap: 18 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-        {agent ? <Avatar initials="AG" size={36} color={c.purple} /> : <Avatar initials="TU" size={36} />}
+        <AuthorAvatar author={e.by} agent={e.agent} size={36} />
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={t(600, 16, 1.3, { letterSpacing: -0.24 })}>{agent ? 'Modifica di un agente' : 'Tua modifica'}</Text>
+          <Text style={t(600, 16, 1.3, { letterSpacing: -0.24 })}>{agent ? `Modifica di ${e.agent?.name ?? 'un agente'}` : 'Tua modifica'}</Text>
           <Text numberOfLines={1} style={t(400, 12, 1.3, { color: c.ink3, marginTop: 2 })}>
             <Text style={{ fontFamily: font.mono }}>{basename(e.path)}</Text> · {projectOf(e.path) ?? 'Radice'} · {relTime(e.at)} · {e.kind === 'created' ? 'creazione' : e.kind === 'deleted' ? 'eliminazione' : 'modifica'}
           </Text>

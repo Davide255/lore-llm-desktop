@@ -11,7 +11,8 @@
     "build": "tsc --noEmit && vite build",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/kb/*.test.ts",
+    "test": "node --test src/kb/*.test.ts electron/*.test.cjs",
+    "test:ui": "node --test --test-concurrency=1 test/ui.test.mjs",
     "dist": "npm run build && electron-builder"
   },
   "build": {
@@ -48,6 +49,7 @@
     "electron": "^38.8.6",
     "electron-builder": "^26.15.3",
     "material-symbols": "^0.47.5",
+    "playwright-core": "^1.56.1",
     "react-native": "^0.81.6",
     "typescript": "^5.9.3",
     "vite": "^8.3.1",

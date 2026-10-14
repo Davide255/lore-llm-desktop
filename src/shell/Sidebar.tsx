@@ -6,6 +6,7 @@ import { openItemMenu, openRoute } from '../state/actions';
 import { countFiles, fileKind, projectIcon, projects, relTime, rootFiles } from '../kb/paths';
 import type { TreeNode } from '../kb/types';
 import { Avatar, eventPoint, Hover, Icon, Kbd, Pill } from '../ui/primitives';
+import { AgentAvatar } from '../ui/identity';
 
 export function Sidebar() {
   const app = useApp();
@@ -55,8 +56,25 @@ export function Sidebar() {
         {!projs.length && !loose.length ? <Text style={t(400, 12.5, 1.5, { color: c.ink3, paddingHorizontal: 10, paddingTop: 4 })}>Nessun progetto. Premi + per crearne uno.</Text> : null}
       </ScrollView>
 
+      <AccountRow />
       <AgentsFooter />
     </View>
+  );
+}
+
+function AccountRow() {
+  const app = useApp();
+  const { user } = app;
+  return (
+    <Hover
+      onPress={() => app.navigate({ name: 'settings', section: 'account' })}
+      style={({ hovered }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, height: 38, paddingHorizontal: 10, marginBottom: 6, borderRadius: radius.md, backgroundColor: hovered ? c.fill05 : 'transparent' })}
+    >
+      {user ? <Avatar name={user.name} size={22} /> : <Icon name="account_circle" size={22} color={c.ink3} />}
+      <Text numberOfLines={1} style={[t(500, 12.5, 1.2, { color: user ? c.ink : c.ink2 }), { flex: 1 }]}>
+        {user ? user.name : app.signingIn ? 'Accesso in corso…' : 'Accedi con Google'}
+      </Text>
+    </Hover>
   );
 }
 
@@ -162,7 +180,7 @@ function TreeRow({ node, depth }: { node: TreeNode; depth: number }) {
 
 function AgentsFooter() {
   const app = useApp();
-  const active = app.agents.filter((a) => a.active);
+  const active = app.agents;
   const lastAgentWrite = app.activity.find((a) => a.by === 'agent');
   const shown = active.slice(0, 2);
   return (
@@ -174,7 +192,7 @@ function AgentsFooter() {
         <View style={{ flexDirection: 'row' }}>
           {shown.map((a, i) => (
             <View key={a.id} style={{ marginLeft: i ? -8 : 0 }}>
-              <Avatar name={a.name} size={24} ring={i ? c.sidebar : undefined} />
+              <AgentAvatar agent={a} size={24} ring={i ? c.sidebar : undefined} />
             </View>
           ))}
         </View>

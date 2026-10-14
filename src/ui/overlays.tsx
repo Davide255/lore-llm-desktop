@@ -44,7 +44,8 @@ export function Scrim({ children, onDismiss, align = 'center', style }: { childr
     <View
       style={[
         { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,.45)', alignItems: 'center', justifyContent: align === 'center' ? 'center' : 'flex-start', paddingTop: align === 'top' ? 90 : 0, zIndex: 50 },
-        web({ backdropFilter: 'blur(4px)', animation: 'lore-fade .12s ease-out' }),
+        // Fixed, so a dialog opened from inside a scroll view still covers the whole window.
+        web({ position: 'fixed', backdropFilter: 'blur(4px)', animation: 'lore-fade .12s ease-out' }),
         style,
       ]}
     >

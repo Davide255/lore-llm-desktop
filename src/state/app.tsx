@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { lore } from '../kb/bridge';
-import type { ActivityEvent, Agent, Prefs, TreeNode } from '../kb/types';
+import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, NewAgent, Permission, Prefs, TreeNode } from '../kb/types';
 import { basename, dirname, fileKind, findNode } from '../kb/paths';
 
 export type Route =
@@ -10,7 +10,7 @@ export type Route =
   | { name: 'activity'; id?: string }
   | { name: 'settings'; section?: SettingsSection };
 
-export type SettingsSection = 'general' | 'editor' | 'agents' | 'shortcuts';
+export type SettingsSection = 'account' | 'general' | 'editor' | 'agents' | 'shortcuts';
 
 export type Dialog =
   | { kind: 'newFile'; dir: string }
@@ -54,8 +54,11 @@ export interface EditorHandle {
 type Sync = 'synced' | 'saving' | 'external' | 'error';
 
 interface AppCtx {
-  root: string | null;
+  /** Host of the Lore server holding the knowledge base. */
+  server: string;
   ready: boolean;
+  /** The signed-in user's knowledge base finished its first load. */
+  loaded: boolean;
   tree: TreeNode[];
   route: Route;
   navigate: (r: Route, opts?: { force?: boolean }) => void;
@@ -79,14 +82,22 @@ interface AppCtx {
   prefs: Prefs;
   setPrefs: (p: Prefs) => void;
   agents: Agent[];
-  saveAgents: (a: Agent[]) => Promise<void>;
+  createAgent: (a: { kind: AgentKind; name: string; permission: Permission; scope: string[] }) => Promise<NewAgent | undefined>;
+  updateAgent: (id: string, patch: Partial<Pick<Agent, 'name' | 'kind' | 'permission' | 'scope'>>) => Promise<void>;
+  deleteAgent: (id: string) => Promise<void>;
+  audit: AuditItem[];
+  loadAudit: () => Promise<void>;
+  user: AuthUser | null;
+  signingIn: boolean;
+  signIn: () => Promise<void>;
+  cancelSignIn: () => void;
+  signOut: () => Promise<void>;
   sync: Sync;
   setSync: (s: Sync) => void;
   /** Bumped whenever files change on disk; screens re-read on change. */
   revision: number;
   changedPaths: string[];
   refresh: () => Promise<void>;
-  chooseRoot: () => Promise<void>;
   editorRef: React.MutableRefObject<EditorHandle | null>;
   ops: {
     createFile: (path: string, content: string) => Promise<void>;
@@ -95,7 +106,6 @@ interface AppCtx {
     duplicate: (path: string) => Promise<void>;
     remove: (path: string) => Promise<void>;
     copyLink: (path: string) => Promise<void>;
-    reveal: (path: string) => Promise<void>;
     write: (path: string, content: string) => Promise<void>;
   };
 }
@@ -110,8 +120,9 @@ export const useApp = () => {
 let toastSeq = 1;
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [root, setRoot] = useState<string | null>(null);
+  const [server, setServer] = useState('');
   const [ready, setReady] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [route, setRoute] = useState<Route>({ name: 'projects' });
   const history = useRef<Route[]>([]);
@@ -125,6 +136,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [lastSeen, setLastSeen] = useState(0);
   const [prefs, setPrefsState] = useState<Prefs>({});
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [audit, setAudit] = useState<AuditItem[]>([]);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
   const [sync, setSync] = useState<Sync>('synced');
   const [revision, setRevision] = useState(0);
   const [changedPaths, setChangedPaths] = useState<string[]>([]);
@@ -139,24 +153,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const loadAgents = useCallback(async () => {
-    setAgents((await lore.readMeta<Agent[]>('agents.json')) ?? []);
+    setAgents(await lore.agents());
+  }, []);
+
+  const loadAudit = useCallback(async () => {
+    setAudit((await lore.audit({ limit: 50 })).items);
   }, []);
 
   // Boot
   useEffect(() => {
     (async () => {
-      const [r, p, a, seen] = await Promise.all([lore.getRoot(), lore.prefs(), lore.activity(), lore.lastSeenActivity()]);
-      setRoot(r);
+      const [s, p, u] = await Promise.all([lore.server(), lore.prefs(), lore.authUser()]);
+      setServer(s);
       setPrefsState(p);
-      setActivity(a);
-      setLastSeen(seen);
-      if (r) {
-        await refresh();
-        await loadAgents();
-      }
+      setUser(u);
       setReady(true);
     })();
-  }, [refresh, loadAgents]);
+  }, []);
 
   // Disk changes from agents (or any other program)
   useEffect(() => {
@@ -170,15 +183,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         clearTimeout(t);
         t = setTimeout(() => setSync('synced'), 2500);
       }
-      if (paths.some((p) => p.startsWith('.lore/'))) loadAgents();
+      if (external) loadAudit().catch(() => {});
     });
     const offActivity = lore.onActivity((ev) => setActivity((a) => [ev, ...a.filter((x) => x.id !== ev.id)].slice(0, 300)));
+    // Sign-in, sign-out, or a session that expired for good.
+    const offAuth = lore.onAuthChanged(setUser);
     return () => {
       offChanged();
       offActivity();
+      offAuth();
       clearTimeout(t);
     };
-  }, [refresh, loadAgents]);
+  }, [refresh, loadAudit]);
 
   // ------------------------------------------------------------------ toasts
   const dismissToast = useCallback((id: number) => setToasts((ts) => ts.filter((x) => x.id !== id)), []);
@@ -191,6 +207,38 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [dismissToast],
   );
   const fail = useCallback((e: unknown) => toast({ icon: 'error', text: e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e), ttl: 5000 }), [toast]);
+
+  // Each account has its own knowledge base: (re)load everything when the user changes.
+  const userId = user?.id ?? null;
+  useEffect(() => {
+    setLoaded(false);
+    setTree([]);
+    setAgents([]);
+    setAudit([]);
+    setRoute({ name: 'projects' });
+    history.current = [];
+    setExpanded(new Set());
+    setSelected(null);
+    if (!userId) return;
+    let live = true;
+    (async () => {
+      try {
+        const [a, seen] = await Promise.all([lore.activity(), lore.lastSeenActivity()]);
+        if (!live) return;
+        setActivity(a);
+        setLastSeen(seen);
+        await refresh();
+        await Promise.all([loadAgents(), loadAudit()]);
+      } catch (e) {
+        if (live) fail(e);
+      } finally {
+        if (live) setLoaded(true);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [userId, refresh, loadAgents, loadAudit, fail]);
 
   // ------------------------------------------------------------- navigation
   const guard = useCallback((next: () => void, force?: boolean) => {
@@ -336,7 +384,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         await lore.copy(path.includes(' ') ? `<${path}>` : path);
         toast({ icon: 'link', mono: path, text: 'copiato negli appunti' });
       },
-      reveal: (path) => lore.reveal(path),
       write: async (path, content) => {
         await withSync(() => lore.write(path, content));
       },
@@ -363,33 +410,79 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const chooseRoot = useCallback(async () => {
-    const r = await lore.chooseRoot();
-    if (r && r !== root) {
-      setRoot(r);
-      setRoute({ name: 'projects' });
-      history.current = [];
-      await refresh();
-      await loadAgents();
-    }
-  }, [root, refresh, loadAgents]);
-
   const setPrefs = useCallback((p: Prefs) => {
     setPrefsState((cur) => ({ ...cur, ...p }));
     lore.setPrefs(p);
   }, []);
 
-  const saveAgents = useCallback(
-    async (a: Agent[]) => {
-      setAgents(a);
+  const createAgent = useCallback<AppCtx['createAgent']>(
+    async (a) => {
       try {
-        await lore.writeMeta('agents.json', a);
+        const res = await lore.createAgent(a);
+        setAgents((cur) => [res.agent, ...cur]);
+        return res;
       } catch (e) {
         fail(e);
+        return undefined;
       }
     },
     [fail],
   );
+
+  const updateAgent = useCallback<AppCtx['updateAgent']>(
+    async (id, patch) => {
+      setAgents((cur) => cur.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+      try {
+        await lore.updateAgent(id, patch);
+      } catch (e) {
+        fail(e);
+        loadAgents().catch(() => {});
+      }
+    },
+    [fail, loadAgents],
+  );
+
+  // Revoking is immediate on the server: the agent's next MCP call gets 401.
+  const deleteAgent = useCallback<AppCtx['deleteAgent']>(
+    async (id) => {
+      try {
+        await lore.deleteAgent(id);
+        setAgents((cur) => cur.filter((a) => a.id !== id));
+        toast({ icon: 'block', text: 'Agente revocato' });
+      } catch (e) {
+        fail(e);
+      }
+    },
+    [fail, toast],
+  );
+
+  const signIn = useCallback(async () => {
+    setSigningIn(true);
+    try {
+      const u = await lore.signIn();
+      setUser(u);
+      if (u) toast({ icon: 'check_circle', text: `Accesso eseguito come ${u.email ?? u.name}` });
+    } catch (e) {
+      // Closing the login on purpose isn't an error worth a toast.
+      if (!(e instanceof Error && e.message.includes('Accesso annullato'))) fail(e);
+    } finally {
+      setSigningIn(false);
+    }
+  }, [toast, fail]);
+
+  const cancelSignIn = useCallback(() => {
+    lore.cancelSignIn();
+  }, []);
+
+  const signOut = useCallback(async () => {
+    try {
+      await lore.signOut();
+      setUser(null);
+      toast({ icon: 'logout', text: 'Disconnesso' });
+    } catch (e) {
+      fail(e);
+    }
+  }, [toast, fail]);
 
   const markSeen = useCallback(() => {
     lore.markActivitySeen().then(setLastSeen);
@@ -398,8 +491,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const unseen = activity.filter((a) => a.by === 'agent' && a.at > lastSeen).length;
 
   const value: AppCtx = {
-    root,
+    server,
     ready,
+    loaded,
     tree,
     route,
     navigate,
@@ -423,13 +517,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     prefs,
     setPrefs,
     agents,
-    saveAgents,
+    createAgent,
+    updateAgent,
+    deleteAgent,
+    audit,
+    loadAudit,
+    user,
+    signingIn,
+    signIn,
+    cancelSignIn,
+    signOut,
     sync,
     setSync,
     revision,
     changedPaths,
     refresh,
-    chooseRoot,
     editorRef,
     ops,
   };

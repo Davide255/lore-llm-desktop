@@ -4,8 +4,9 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { openItemMenu, openRoute } from '../state/actions';
 import { countFiles, fileKind, formatSize, projectOf, relTime } from '../kb/paths';
-import type { TreeNode } from '../kb/types';
-import { Avatar, eventPoint, Hover, Icon } from './primitives';
+import type { AgentRef, TreeNode } from '../kb/types';
+import { eventPoint, Hover, Icon } from './primitives';
+import { AuthorChip } from './identity';
 
 export type Column = 'size' | 'project' | 'modified' | 'author';
 
@@ -20,13 +21,8 @@ export function FileIcon({ node, size = 18 }: { node: TreeNode; size?: number })
   return <Icon name="description" size={size - 1} color={c.ink3} />;
 }
 
-export function AuthorCell({ author }: { author: 'you' | 'agent' }) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-      {author === 'you' ? <Avatar initials="TU" size={22} /> : <Avatar initials="AG" size={22} color={c.purple} />}
-      <Text style={t(400, 13, 1, { color: c.ink2 })}>{author === 'you' ? 'Tu' : 'Agente'}</Text>
-    </View>
-  );
+export function AuthorCell({ author, agent }: { author: 'you' | 'agent'; agent?: AgentRef }) {
+  return <AuthorChip author={author} agent={agent} />;
 }
 
 export function FileTable({ rows, columns, header = true, empty }: { rows: TreeNode[]; columns: Column[]; header?: boolean; empty?: string }) {
@@ -70,7 +66,7 @@ export function FileTable({ rows, columns, header = true, empty }: { rows: TreeN
             {columns.map((col) => (
               <View key={col} style={{ width: WIDTH[col] }}>
                 {col === 'author' ? (
-                  n.kind === 'file' ? <AuthorCell author={n.author} /> : <Text style={t(400, 13, 1, { color: c.ink3 })}>—</Text>
+                  n.kind === 'file' ? <AuthorCell author={n.author} agent={n.agent} /> : <Text style={t(400, 13, 1, { color: c.ink3 })}>—</Text>
                 ) : (
                   <Text numberOfLines={1} style={t(400, 13, 1.2, { color: col === 'project' ? c.ink2 : c.ink3 })}>
                     {col === 'size' ? (n.kind === 'folder' ? `${countFiles(n)} file` : formatSize(n.size)) : col === 'project' ? projectOf(n.path) ?? 'Radice' : relTime(n.mtime)}

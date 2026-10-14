@@ -5,7 +5,8 @@ import { useApp } from '../state/app';
 import { openItemMenu } from '../state/actions';
 import { lore } from '../kb/bridge';
 import { basename, fileKind, formatSize, longDate, relTime, wordCount } from '../kb/paths';
-import { Avatar, Btn, Hover, Icon, IconBtn, InfoStrip, Kbd } from '../ui/primitives';
+import { AuthorAvatar, authorName } from '../ui/identity';
+import { Btn, Hover, Icon, IconBtn, InfoStrip, Kbd } from '../ui/primitives';
 import { Markdown, extractHeadings } from '../ui/Markdown';
 import { anchorBelow } from '../ui/overlays';
 import { EmptyState, FileBar, Rail, RailHeading, useFile, useLinkHandler, useWidth } from './common';
@@ -46,7 +47,7 @@ export function DocumentScreen({ path }: { path: string }) {
   if (error) return <EmptyState icon="error" title="Impossibile aprire il file" body={error} />;
   if (!file) return <View style={{ flex: 1 }} />;
 
-  const author = file.author === 'you' ? 'da te' : 'da un agente';
+  const author = file.author === 'you' ? 'da te' : file.agent ? `da ${file.agent.name}` : 'da un agente';
   const subtitle = readOnly ? 'Generato · sola lettura' : `${formatSize(file.size)} · modificato ${relTime(file.mtime)} ${author}`;
 
   // Heading offsets are relative to the markdown root; add its own offset + padding.
@@ -125,9 +126,9 @@ export function DocumentScreen({ path }: { path: string }) {
               <>
                 <RailHeading>Generazione</RailHeading>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-                  {file.author === 'you' ? <Avatar initials="TU" size={28} /> : <Avatar initials="AG" size={28} color={c.purple} />}
+                  <AuthorAvatar author={file.author} agent={file.agent} size={28} />
                   <View>
-                    <Text style={t(500, 13, 1.3)}>{file.author === 'you' ? 'Tu' : 'Agente'}</Text>
+                    <Text style={t(500, 13, 1.3)}>{authorName(file.author, file.agent)}</Text>
                     <Text style={t(400, 11.5, 1.3, { color: c.ink3 })}>{relTime(file.mtime)}</Text>
                   </View>
                 </View>

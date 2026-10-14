@@ -16,7 +16,7 @@ import { SettingsScreen } from './screens/SettingsScreen';
 import { DialogHost } from './dialogs/Dialogs';
 import { SearchPalette } from './dialogs/SearchPalette';
 import { PopupMenuLayer, ToastLayer } from './ui/overlays';
-import { Btn, IconWell, Kbd } from './ui/primitives';
+import { Btn, IconWell } from './ui/primitives';
 
 export default function App() {
   return (
@@ -36,15 +36,17 @@ function Shell() {
     <View style={[{ flex: 1, backgroundColor: c.window }, web({ height: '100vh', overflow: 'hidden' })]}>
       <TitleBar />
       <View style={{ flex: 1, flexDirection: 'row', minHeight: 0 }}>
-        {app.root ? (
+        {!app.user ? (
+          <Login />
+        ) : !app.loaded ? (
+          <Loading />
+        ) : (
           <>
             {!app.prefs.sidebarCollapsed ? <Sidebar /> : null}
             <View style={{ flex: 1, minWidth: 0, position: 'relative' }}>
               <Main />
             </View>
           </>
-        ) : (
-          <Welcome />
         )}
       </View>
       <DialogHost />
@@ -75,7 +77,8 @@ function Main() {
   }
 }
 
-function Welcome() {
+// The first thing on screen: nothing else is reachable until the user signs in.
+function Login() {
   const app = useApp();
   return (
     <View style={[{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 }, web({ backgroundImage: c.bgGradient })]}>
@@ -85,15 +88,27 @@ function Welcome() {
           Lore LLM Desktop
         </Text>
         <Text style={t(400, 14.5, 1.6, { color: c.ink78, textAlign: 'center' })}>
-          La knowledge base che condividi con i tuoi agenti. Scegli la cartella che la contiene: ogni sottocartella è un progetto, con il suo <Text style={{ fontFamily: font.mono }}>index.md</Text> generato e la sua{' '}
-          <Text style={{ fontFamily: font.mono }}>checklist.md</Text>.
+          La knowledge base che condividi con i tuoi agenti. Ogni progetto ha il suo <Text style={{ fontFamily: font.mono }}>index.md</Text> generato e la sua{' '}
+          <Text style={{ fontFamily: font.mono }}>checklist.md</Text>. Accedi per aprirla.
         </Text>
-        <Btn variant="primary" icon="folder_open" label="Scegli la cartella della knowledge base" onPress={app.chooseRoot} style={{ marginTop: 8 }} />
-        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 4 }}>
-          <Kbd>⌘K</Kbd>
-          <Text style={t(400, 12, 1, { color: c.ink3 })}>cerca ovunque, una volta aperta</Text>
-        </View>
+        {app.signingIn ? (
+          <View style={{ alignItems: 'center', gap: 10, marginTop: 8 }}>
+            <Text style={t(500, 13.5, 1.4, { color: c.ink2 })}>Completa l’accesso nella scheda del browser che si è aperta…</Text>
+            <Btn label="Annulla" onPress={app.cancelSignIn} />
+          </View>
+        ) : (
+          <Btn variant="primary" icon="login" label="Accedi con Google" onPress={app.signIn} style={{ marginTop: 8 }} />
+        )}
+        <Text style={t(400, 12, 1, { color: c.ink3, marginTop: 4 })}>Server: {app.server}</Text>
       </View>
+    </View>
+  );
+}
+
+function Loading() {
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={t(400, 13.5, 1, { color: c.ink3 })}>Caricamento della knowledge base…</Text>
     </View>
   );
 }
@@ -106,7 +121,7 @@ function useGlobalShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const a = ref.current;
-      if (!a.root) return;
+      if (!a.user || !a.loaded) return;
       const mod = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
       const el = document.activeElement as HTMLElement | null;

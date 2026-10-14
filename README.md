@@ -43,11 +43,31 @@ npm install
 npm run dev        # Vite + Electron with hot reload
 npm run build      # typecheck + production bundle in dist/
 npm start          # run Electron on the built bundle
-npm test           # checklist parser tests
+npm test           # checklist parser + agent mapping/attribution tests
+npm run test:ui    # renderer in headless Chrome with a fake bridge (LORE_UI_SHOTS=<dir> saves screenshots)
 npm run dist       # installer via electron-builder (release/)
 ```
 
 `LORE_USER_DATA=<dir>` runs the app with an isolated profile (handy for demos and tests).
+
+## Sign in with Google
+
+Optional; the local knowledge base works without an account. Login goes through the
+Cognito user pool the lore-llm Worker trusts, with Google as federated IdP
+(`electron/auth.cjs`): Authorization Code + PKCE in the system browser, callback on
+`http://localhost:42813/callback`. Tokens stay in the main process, encrypted with
+`safeStorage` in `<userData>/lore-auth.bin`; the renderer only sees name and email.
+`auth.idToken()` returns a fresh ID token for `Authorization: Bearer` calls to `/v1/*`.
+
+The Cognito app client must be public (no secret), allow the `code` flow, the
+`openid email profile` scopes, the `Google` IdP and the callback URL above. Its id
+also goes in the Worker's `COGNITO_CLIENT_IDS`.
+
+| Env var | Default |
+| --- | --- |
+| `LORE_COGNITO_CLIENT_ID` | `2ij9dpmj7gacqj370obj0lehg2` ("Lore LLM Desktop", dev pool) |
+| `LORE_COGNITO_DOMAIN` | `https://eu-north-1orshbeg8h.auth.eu-north-1.amazoncognito.com` |
+| `LORE_AUTH_PORT` | `42813` |
 
 ## Shortcuts
 
