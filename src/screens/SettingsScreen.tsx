@@ -253,6 +253,7 @@ function Agents() {
           </Text>
         </View>
       </Card>
+      <ClaudeConnector />
       <AuditLog />
       {adding ? (
         <AddAgentDialog
@@ -269,7 +270,36 @@ function Agents() {
   );
 }
 
-const ACTION_LABEL = { CREATE: 'creato', UPDATE: 'modificato', DELETE: 'eliminato' } as const;
+/** Claude (claude.ai / Desktop) adds the server as a custom connector and signs in with OAuth: no token to paste. */
+function ClaudeConnector() {
+  const app = useApp();
+  const url = `https://${app.server}/mcp`;
+  const copy = async () => {
+    await lore.copy(url);
+    app.toast({ icon: 'content_copy', text: 'URL copiato negli appunti' });
+  };
+  return (
+    <Card style={{ gap: 12 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+        <IconWell icon="key" tint="info" />
+        <View style={{ flex: 1 }}>
+          <Text style={t(500, 14, 1.3)}>Claude · connettore con OAuth</Text>
+          <Text style={t(400, 12, 1.45, { color: c.ink3, marginTop: 3 })}>
+            In Claude apri Impostazioni → Connettori → Aggiungi connettore personalizzato e incolla questo URL. L’accesso avviene con il tuo account, senza token.
+          </Text>
+        </View>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+        <Text selectable numberOfLines={1} style={[codeBox, { flex: 1, minWidth: 0 }]}>
+          {app.server ? url : '—'}
+        </Text>
+        <Btn icon="content_copy" label="Copia" onPress={copy} />
+      </View>
+    </Card>
+  );
+}
+
+const ACTION_LABEL ={ CREATE: 'creato', UPDATE: 'modificato', DELETE: 'eliminato' } as const;
 
 /** Server-side audit: every file an agent created, changed or deleted. */
 function AuditLog() {
