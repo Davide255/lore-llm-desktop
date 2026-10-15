@@ -18,6 +18,7 @@
   "build": {
     "appId": "it.athly.lore",
     "productName": "Lore LLM Desktop",
+    "icon": "build/icon.png",
     "files": [
       "dist/**",
       "electron/**"
