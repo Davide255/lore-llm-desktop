@@ -34,7 +34,7 @@ after(async () => {
 });
 
 /** Installs a fake `window.lore`; every call is recorded in `window.__calls`. */
-function fakeBridge({ signedIn }) {
+function fakeBridge({ signedIn, vault = false }) {
   const now = Date.now();
   const claude = { id: 'a-claude', name: 'Claude', kind: 'claude', permission: 'write', scope: ['*'], createdAt: now - 3_600_000 };
   const hunk = (lines) => [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((l) => `+${l}`) }];
@@ -48,6 +48,7 @@ function fakeBridge({ signedIn }) {
           { kind: 'file', name: 'index.md', path: 'Athly/index.md', mtime: now, size: 120, author: 'agent', summary: '' },
           { kind: 'file', name: 'Test.md', path: 'Athly/Test.md', mtime: now - 60_000, size: 40, author: 'you' },
           { kind: 'file', name: 'test 1.md', path: 'Athly/test 1.md', mtime: now, size: 60, author: 'agent', agent: { id: 'a-claude', name: 'Claude', kind: 'claude' } },
+          { kind: 'file', type: 'attachment', mime: 'image/png', name: 'pic.png', path: 'Athly/pic.png', mtime: now, size: 68, author: 'you' },
         ],
       },
     ],
@@ -57,6 +58,24 @@ function fakeBridge({ signedIn }) {
       { id: 'e3', at: now - 240_000, path: 'Athly/old.md', kind: 'deleted', by: 'agent', agent: { id: 'gone', name: 'Agente revocato', kind: null }, added: 0, removed: 1, hunks: [], before: 'x', after: null },
     ],
     audit: [{ id: 7, at: now - 5_000, agent: { id: 'a-claude', name: 'Claude', kind: 'claude' }, action: 'CREATE', path: 'Athly/test 1.md' }],
+    contents: {
+      'Athly/Test.md': '# Test\n\nVedi [[test 1]], [[test 1#Sezione|la sezione]] e [[Nota mancante]].\n\n![[pic.png|120]]\n',
+    },
+    links: { 'Athly/Test.md': ['[[test 1]]', '[[test 1#Sezione|la sezione]]', '[[Nota mancante]]', '[[pic.png|120]]'] },
+    vault: {
+      state: vault ? 'idle' : 'off',
+      enabled: vault,
+      root: vault ? '/Users/me/Documents/Lore LLM' : null,
+      defaultRoot: '/Users/me/Documents/Lore LLM',
+      linkFormat: 'markdown',
+      pending: 0,
+      lastSyncAt: vault ? now - 30_000 : null,
+      unsynced: vault ? [{ path: 'nota.md', reason: 'Fuori da un progetto: spostalo in una cartella' }] : [],
+      conflicts: [],
+      error: null,
+      confirm: null,
+    },
+    obsidian: { installed: true, registered: vault },
   };
   window.__calls = [];
   const rec = (name, fn) => async (...args) => {
@@ -66,7 +85,7 @@ function fakeBridge({ signedIn }) {
   const noop = () => () => {};
   window.lore = {
     tree: rec('tree', async () => state.tree),
-    read: rec('read', async (p) => ({ path: p, content: '# x', mtime: now, size: 3, birthtime: now, author: 'agent' })),
+    read: rec('read', async (p) => ({ path: p, content: state.contents[p] ?? '# x\n\n## Sezione\n', mtime: now, size: 3, birthtime: now, author: 'agent' })),
     write: rec('write', async () => true),
     create: rec('create', async () => true),
     mkdir: rec('mkdir', async () => true),
@@ -75,6 +94,24 @@ function fakeBridge({ signedIn }) {
     remove: rec('remove', async () => 't'),
     undoDelete: rec('undoDelete', async () => true),
     search: rec('search', async () => []),
+    links: rec('links', async () => state.links),
+    vaultStatus: rec('vaultStatus', async () => state.vault),
+    vaultChooseRoot: rec('vaultChooseRoot', async () => null),
+    vaultPreview: rec('vaultPreview', async (root) => ({ ok: true, root: root ?? state.vault.defaultRoot, exists: false, empty: true, download: 3 })),
+    vaultEnable: rec('vaultEnable', async ({ root }) => {
+      state.vault = { ...state.vault, enabled: true, state: 'idle', root: root ?? state.vault.defaultRoot };
+      return state.vault;
+    }),
+    vaultDisable: rec('vaultDisable', async () => (state.vault = { ...state.vault, enabled: false, state: 'off' })),
+    vaultSyncNow: rec('vaultSyncNow', async () => state.vault),
+    vaultConfirm: rec('vaultConfirm', async () => state.vault),
+    vaultReveal: rec('vaultReveal', async () => true),
+    vaultSetLinkFormat: rec('vaultSetLinkFormat', async (f) => (state.vault = { ...state.vault, linkFormat: f })),
+    obsidianStatus: rec('obsidianStatus', async () => state.obsidian),
+    openInObsidian: rec('openInObsidian', async () => true),
+    launchObsidian: rec('launchObsidian', async () => {}),
+    openAttachment: rec('openAttachment', async () => ''),
+    takePendingLink: rec('takePendingLink', async () => null),
     activity: rec('activity', async () => state.activity),
     markActivitySeen: rec('markActivitySeen', async () => now),
     lastSeenActivity: rec('lastSeenActivity', async () => 0),
@@ -101,14 +138,19 @@ function fakeBridge({ signedIn }) {
     onChanged: noop,
     onActivity: noop,
     onCloseRequested: noop,
+    onVaultStatus: noop,
+    onVaultConflict: noop,
+    onVaultConfirm: noop,
+    onVaultNotice: noop,
+    onNavigate: noop,
   };
 }
 
-async function open({ signedIn = true } = {}) {
+async function open({ signedIn = true, vault = false } = {}) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(fakeBridge, { signedIn });
+  await page.addInitScript(fakeBridge, { signedIn, vault });
   await page.goto(url);
   return { page, errors };
 }
@@ -128,6 +170,9 @@ test('signed out: the login screen is the only thing reachable', async () => {
     assert.equal(await page.getByText(chrome, { exact: true }).count(), 0, `"${chrome}" must not show before login`);
   }
   assert.deepEqual(await calls(page, 'tree'), [], 'the knowledge base is not loaded before login');
+  // Sign in with Apple sits next to Google (App Store rule 4.8) and asks for the Apple provider.
+  await page.getByText('Accedi con Apple').click();
+  assert.deepEqual(await calls(page, 'signIn'), [['apple']]);
   await shot(page, '1-login');
   assert.deepEqual(errors, []);
   await page.close();
@@ -202,5 +247,77 @@ test('create agent with defaults: Claude, read and write', async () => {
   await page.keyboard.press('Enter');
   assert.deepEqual(await calls(page, 'createAgent'), [[{ kind: 'claude', name: 'Claude', permission: 'write', scope: ['*'] }]]);
   await page.getByText('claude mcp add --transport http lore', { exact: false }).waitFor();
+  await page.close();
+});
+
+test('wikilinks render, resolve and navigate; missing ones are dimmed and offer to create', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Athly', { exact: true }).first().click();
+  await page.getByText('Test.md', { exact: true }).first().click();
+  await page.getByText('la sezione', { exact: true }).waitFor();
+  // The embed resolves to the attachment (its bytes come from Electron's lore-asset:// protocol,
+  // which a plain browser can't load: then the image falls back to its name).
+  assert.equal(await page.locator('[data-asset="Athly/pic.png"]').count(), 1);
+  await shot(page, '7-wikilinks');
+  // A missing note: toast with "Crea nota".
+  await page.getByText('Nota mancante', { exact: true }).click();
+  await page.getByText('non esiste ancora').waitFor();
+  await page.getByText('Crea nota', { exact: true }).click();
+  assert.deepEqual(await calls(page, 'create'), [['Athly/Nota mancante.md', '# Nota mancante\n\n']]);
+  // A resolved one navigates.
+  await page.getByText('Test.md', { exact: true }).first().click();
+  await page.getByText('test 1', { exact: true }).first().click();
+  await page.getByText('Citato da').waitFor();
+  assert.ok((await calls(page, 'read')).some(([p]) => p === 'Athly/test 1.md'));
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('attachments open in their own screen', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Athly', { exact: true }).first().click();
+  await page.getByText('pic.png', { exact: true }).first().click();
+  await page.getByText('Usato in').waitFor();
+  await page.getByText('Apri', { exact: true }).click();
+  assert.deepEqual(await calls(page, 'openAttachment'), [['Athly/pic.png']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('obsidian: setup from settings enables the local vault', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Usi Obsidian?').waitFor();
+  await page.getByText('Impostazioni', { exact: true }).first().click();
+  await page.getByText('Obsidian', { exact: true }).first().click();
+  await page.getByText('Copia locale della knowledge base').waitFor();
+  await page.getByRole('switch').first().click();
+  await page.getByText('Copia locale per Obsidian').waitFor();
+  await page.getByText('Verrà creata: 3 file da scaricare.').waitFor();
+  await shot(page, '8-vault-setup');
+  await page.getByText('Attiva', { exact: true }).click();
+  assert.deepEqual(await calls(page, 'vaultEnable'), [[{ root: '/Users/me/Documents/Lore LLM', linkFormat: 'markdown' }]]);
+  // Next step explains the one manual step in Obsidian.
+  await page.getByText('Scegli «Apri cartella come vault» (Open folder as vault)').waitFor();
+  await shot(page, '9-vault-register');
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('obsidian: status, "Apri in Obsidian" and the default editor', async () => {
+  const { page, errors } = await open({ vault: true });
+  await page.getByText('Impostazioni', { exact: true }).first().click();
+  await page.getByText('Obsidian', { exact: true }).first().click();
+  await page.getByText('Sincronizzata', { exact: true }).waitFor();
+  await page.getByText('Non sincronizzati (1)').waitFor();
+  await shot(page, '10-vault-status');
+  // Default editor → Obsidian: "Modifica" hands the note over.
+  await page.getByText('Obsidian', { exact: true }).last().click();
+  assert.ok((await calls(page, 'setPrefs')).some(([p]) => p.defaultEditor === 'obsidian'));
+  await page.getByText('Athly', { exact: true }).first().click();
+  await page.getByText('Test.md', { exact: true }).first().click();
+  await page.getByLabel('Apri in Obsidian').click();
+  await page.getByText('Modifica in Obsidian').click();
+  assert.deepEqual(await calls(page, 'openInObsidian'), [['Athly/Test.md'], ['Athly/Test.md']]);
+  assert.deepEqual(errors, []);
   await page.close();
 });

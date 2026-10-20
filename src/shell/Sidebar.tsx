@@ -2,7 +2,7 @@ import React from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
-import { openItemMenu, openRoute } from '../state/actions';
+import { editNode, openItemMenu, openRoute } from '../state/actions';
 import { countFiles, fileKind, projectIcon, projects, relTime, rootFiles } from '../kb/paths';
 import type { TreeNode } from '../kb/types';
 import { Avatar, eventPoint, Hover, Icon, Kbd, Pill } from '../ui/primitives';
@@ -108,6 +108,7 @@ function TreeRow({ node, depth }: { node: TreeNode; depth: number }) {
   } else if (isFolder) icon = <Icon name="folder" filled size={16} color={c.blueTint} />;
   else if (kind === 'index') icon = <Icon name="auto_awesome" size={16} color={c.info} />;
   else if (kind === 'checklist') icon = <Icon name="checklist" size={16} color={c.purpleTint} />;
+  else if (kind === 'attachment') icon = <Icon name={/\.pdf$/i.test(node.path) ? 'picture_as_pdf' : 'image'} size={16} color={c.blueTint} />;
   else icon = <Icon name="description" size={16} color={c.ink3} />;
 
   const onPress = () => {
@@ -127,7 +128,7 @@ function TreeRow({ node, depth }: { node: TreeNode; depth: number }) {
           const pt = eventPoint(e);
           openItemMenu(app, node.path, pt.x, pt.y);
         }}
-        onDoubleClick={() => node.kind === 'file' && kind !== 'index' && app.navigate(openRoute(node, true))}
+        onDoubleClick={() => node.kind === 'file' && editNode(app, node)}
         style={({ hovered }) => [
           { flexDirection: 'row', alignItems: 'center', gap: 7, height: 30, paddingLeft: pad, paddingRight: 8, borderRadius: radius.sm, backgroundColor: current ? c.fill09 : hovered ? c.fill05 : 'transparent' },
           ctx && web({ boxShadow: `inset 0 0 0 1.5px ${c.purple}` }),

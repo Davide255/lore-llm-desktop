@@ -34,6 +34,20 @@ export function ProjectsScreen() {
         <Btn variant="primary" icon="add" label="Nuovo progetto" onPress={() => app.openDialog({ kind: 'newProject' })} />
       </View>
 
+      {app.obsidian.installed && app.vault && !app.vault.enabled && !app.prefs.obsidianBannerDismissed ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: radius.card, backgroundColor: c.purple12 }}>
+          <IconWell icon="hub" tint="purple" />
+          <View style={{ flex: 1 }}>
+            <Text style={t(500, 14, 1.3)}>Usi Obsidian?</Text>
+            <Text style={t(400, 12.5, 1.45, { color: c.ink2, marginTop: 3 })}>
+              Tieni una copia della knowledge base in una cartella e modificala in Obsidian: si sincronizza da sola con il cloud e con gli agenti.
+            </Text>
+          </View>
+          <Btn label="Non ora" onPress={() => app.setPrefs({ obsidianBannerDismissed: true })} />
+          <Btn variant="primary" label="Configura" onPress={() => app.openDialog({ kind: 'vaultSetup' })} />
+        </View>
+      ) : null}
+
       {!list.length ? (
         <View style={{ borderWidth: 1, borderStyle: 'dashed', borderColor: c.hair, borderRadius: radius.card, minHeight: 280 }}>
           <EmptyState

@@ -1,23 +1,42 @@
 // Electron main process: owns the window, the login and every call to the
 // lore-llm Worker. The knowledge base lives in the user's cloud space (R2,
 // behind the Worker); the renderer (React Native via react-native-web) talks
-// to it only through the IPC surface exposed in preload.cjs.
-const { app, BrowserWindow, ipcMain, shell, clipboard } = require('electron');
+// to it only through the IPC surface exposed in preload.cjs. Optionally a
+// local vault (vault.cjs) mirrors it to a folder that Obsidian edits.
+const { app, BrowserWindow, ipcMain, shell, clipboard, dialog, protocol, powerMonitor } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const { structuredPatch } = require('diff');
 const auth = require('./auth.cjs');
-const { API_URL, request } = require('./api.cjs');
+const { API_URL, request, requestRaw } = require('./api.cjs');
 const { toAgent, toPatch, applyAudit, refOf } = require('./agents.cjs');
+const { createMirror } = require('./mirror.cjs');
+const { VaultSync, scanVault, planSync, kindOf } = require('./vault.cjs');
+const obsidian = require('./obsidian.cjs');
 
 const isMac = process.platform === 'darwin';
+// Mac App Store build: App Sandbox, so folders outside the container need the user's pick (and a bookmark).
+const MAS = !!process.mas;
 const DEV_URL = process.env.LORE_DEV_URL;
 // Isolated profile for tests/demos: LORE_USER_DATA=/tmp/profile npm start
 if (process.env.LORE_USER_DATA) app.setPath('userData', process.env.LORE_USER_DATA);
 
-// How often agent writes are looked for (one cheap audit query) while the window has focus.
+// One instance per profile: a second launch (e.g. a lore:// link) hands over to the first.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  return;
+}
+
+// Attachments are served to the renderer from lore-asset://kb/<path>.
+protocol.registerSchemesAsPrivileged([{ scheme: 'lore-asset', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
+
+// How often the change cursor is checked: with the window focused, and in the
+// background while the local vault is on (so Obsidian sees agent edits).
 const POLL_MS = 5000;
+const POLL_BACKGROUND_MS = 30_000;
+// Servers without /v1/version: re-list now and then so other devices' edits reach the vault.
+const LEGACY_LIST_MS = 60_000;
 
 // ---------------------------------------------------------------------------
 // Persistent app state (lives in userData). Activity, authorship and empty
@@ -25,7 +44,7 @@ const POLL_MS = 5000;
 // ---------------------------------------------------------------------------
 const statePath = () => path.join(app.getPath('userData'), 'lore-state.json');
 // agentRefs: id -> { name, kind } for every agent ever seen, so revoked ones keep their identity.
-let state = { userId: null, activity: [], authors: {}, folders: [], agentRefs: {}, prefs: {}, lastSeenActivity: 0, lastLogId: 0 };
+let state = { userId: null, activity: [], authors: {}, folders: [], agentRefs: {}, prefs: {}, lastSeenActivity: 0, lastLogId: 0, lastVersion: null };
 
 function loadState() {
   try {
@@ -43,14 +62,17 @@ function saveState() {
 }
 
 function onUser(user) {
+  stopVault();
+  releaseAccess();
   primed = false;
-  cache.clear();
-  files = new Map();
+  mirror.reset();
   writers = new Map();
+  state.lastVersion = null;
   if (user && user.id !== state.userId) {
     state = { ...state, userId: user.id, activity: [], authors: {}, folders: [], agentRefs: {}, lastSeenActivity: 0, lastLogId: 0 };
     saveState();
   }
+  if (user) startVault().catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -61,63 +83,24 @@ const isMd = (name) => name.toLowerCase().endsWith('.md');
 const isIndex = (rel) => rel.split('/').length === 2 && rel.toLowerCase().endsWith('/index.md');
 const under = (rel, prefix) => rel === prefix || rel.startsWith(prefix + '/');
 
+const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf' };
+const mimeOf = (rel) => MIME[rel.slice(rel.lastIndexOf('.') + 1).toLowerCase()];
+
 function checkFilePath(rel) {
   if (!rel.includes('/')) throw new Error('I file devono stare dentro un progetto');
   if (!isMd(rel)) throw new Error('Sono ammessi solo file .md');
 }
 
 // ---------------------------------------------------------------------------
-// Remote mirror: file listing + content cache (powers tree facts, search and
-// activity diffs). Contents are refetched only when the etag changes.
+// Remote mirror (mirror.cjs): listing + note contents, refetched on etag change.
 // ---------------------------------------------------------------------------
-const cache = new Map(); // rel -> { etag, content }
-let files = new Map(); // rel -> { path, size, uploaded, etag }
+const mirror = createMirror({ request, requestRaw });
+const cache = mirror.cache; // rel -> { etag, content }
 let writers = new Map(); // rel -> id of the agent that last modified it (from the audit log)
 let primed = false;
 
 // How far back the audit log is read to attribute existing files.
 const AUDIT_WINDOW = 200;
-
-async function pool(items, size, fn) {
-  const queue = [...items];
-  await Promise.all(Array.from({ length: Math.min(size, queue.length) }, async () => {
-    while (queue.length) await fn(queue.shift());
-  }));
-}
-
-async function fetchFile(rel) {
-  const f = await request('GET', '/v1/file', { query: { path: rel } });
-  cache.set(rel, { etag: f.etag, content: f.content });
-  files.set(rel, { path: rel, size: f.size, uploaded: f.uploaded, etag: f.etag });
-  return f;
-}
-
-/** Re-list the space and pull changed contents. Returns what changed. */
-async function sync() {
-  const { files: list } = await request('GET', '/v1/files');
-  const next = new Map(list.map((f) => [f.path, f]));
-  const changes = [];
-  const stale = list.filter((f) => cache.get(f.path)?.etag !== f.etag);
-  await pool(stale, 6, async (f) => {
-    const before = cache.get(f.path)?.content ?? null;
-    try {
-      const got = await request('GET', '/v1/file', { query: { path: f.path } });
-      cache.set(f.path, { etag: got.etag, content: got.content });
-      next.set(f.path, { path: f.path, size: got.size, uploaded: got.uploaded, etag: got.etag });
-      changes.push({ rel: f.path, before, after: got.content });
-    } catch {
-      next.delete(f.path); // deleted between list and get
-    }
-  });
-  for (const [rel, c] of cache) {
-    if (!next.has(rel)) {
-      cache.delete(rel);
-      changes.push({ rel, before: c.content, after: null });
-    }
-  }
-  files = next;
-  return changes;
-}
 
 async function refreshAgents() {
   const agents = (await request('GET', '/v1/agents')).agents.map(toAgent);
@@ -128,22 +111,30 @@ async function refreshAgents() {
 
 const agentRef = (rel) => refOf(state.agentRefs, writers.get(rel));
 
+let priming = null;
 async function ensurePrimed() {
   if (primed) return;
-  await sync();
-  const [{ items }] = await Promise.all([request('GET', '/v1/audit', { query: { limit: AUDIT_WINDOW } }), refreshAgents()]);
-  writers = new Map();
-  state.lastLogId = applyAudit(writers, items, 0);
-  primed = true;
+  priming ??= (async () => {
+    await mirror.sync();
+    const [{ items }] = await Promise.all([request('GET', '/v1/audit', { query: { limit: AUDIT_WINDOW } }), refreshAgents()]);
+    writers = new Map();
+    state.lastLogId = applyAudit(writers, items, 0);
+    primed = true;
+  })().finally(() => (priming = null));
+  await priming;
 }
 
-/** Sync after the app's own operations. Anything else that changed meanwhile was an agent. */
-async function resync() {
-  const changes = await sync();
+/**
+ * Sync after the app's own operations. Anything else that changed meanwhile was
+ * an agent, unless `agentPaths` (paths in new audit rows) says otherwise: then
+ * the rest came from the user's other devices.
+ */
+async function resync({ agentPaths } = {}) {
+  const changes = await mirror.sync();
   for (const ch of changes) {
-    if (!isIndex(ch.rel) && state.authors[ch.rel] !== files.get(ch.rel)?.etag) {
-      recordChange(ch.rel, ch.before, ch.after, 'agent', agentRef(ch.rel));
-    }
+    if (ch.attachment || isIndex(ch.rel) || state.authors[ch.rel] === mirror.files.get(ch.rel)?.etag) continue;
+    const byAgent = !agentPaths || agentPaths.has(ch.rel);
+    recordChange(ch.rel, ch.before, ch.after, byAgent ? 'agent' : 'you', byAgent ? agentRef(ch.rel) : undefined, byAgent ? {} : { source: 'device' });
   }
   return changes;
 }
@@ -164,7 +155,7 @@ function buildTree() {
     return level;
   };
   for (const rel of state.folders) dirAt(rel.split('/'));
-  for (const f of files.values()) {
+  for (const f of [...mirror.files.values(), ...mirror.attachments.values()]) {
     const segs = f.path.split('/');
     dirAt(segs.slice(0, -1)).set(segs[segs.length - 1], { file: f });
   }
@@ -177,6 +168,9 @@ function toNodes(level) {
     if (entry.dir) {
       const children = toNodes(entry.dir);
       out.push({ kind: 'folder', name, path: entry.rel, mtime: Math.max(0, ...children.map((c) => c.mtime)), size: 0, children });
+    } else if (!isMd(name)) {
+      const f = entry.file;
+      out.push({ kind: 'file', type: 'attachment', mime: mimeOf(f.path), name, path: f.path, mtime: Date.parse(f.uploaded), size: f.size, author: 'you' });
     } else {
       const f = entry.file;
       const author = authorOf(f.path);
@@ -213,7 +207,7 @@ function fileMeta(name, content = '') {
 
 // A file is "yours" when the app wrote the version that is on the server now.
 function authorOf(rel) {
-  return state.authors[rel] && state.authors[rel] === files.get(rel)?.etag ? 'you' : 'agent';
+  return state.authors[rel] && state.authors[rel] === mirror.files.get(rel)?.etag ? 'you' : 'agent';
 }
 
 function recordOwnWrite(rel, etag) {
@@ -222,7 +216,7 @@ function recordOwnWrite(rel, etag) {
 }
 
 function filesUnder(rel) {
-  return [...files.keys()].filter((k) => under(k, rel));
+  return mirror.paths().filter((k) => under(k, rel));
 }
 
 // ---------------------------------------------------------------------------
@@ -248,30 +242,58 @@ function diffStats(before, after) {
   return { added, removed, hunks: patch.hunks };
 }
 
-function recordChange(rel, before, after, by, agent) {
+// `extra`: { source: 'obsidian' | 'device', note }
+function recordChange(rel, before, after, by, agent, extra = {}) {
   if (before === after) return;
   const kind = before == null ? 'created' : after == null ? 'deleted' : 'modified';
   const { added, removed, hunks } = diffStats(before, after);
-  pushActivity({ path: rel, kind, by, ...(agent ? { agent } : {}), added, removed, hunks, before: before ?? null, after: after ?? null });
+  pushActivity({ path: rel, kind, by, ...(agent ? { agent } : {}), ...extra, added, removed, hunks, before: before ?? null, after: after ?? null });
 }
 
 // ---------------------------------------------------------------------------
-// Agent writes: poll the audit log (one row) and resync only when it moved.
+// Polling: one cheap read of the change cursor; re-list only when it moved.
+// The audit log (agent writes) is read then, for attribution.
 // ---------------------------------------------------------------------------
 let polling = false;
-async function poll() {
-  if (polling || !primed || !auth.user() || !win || win.isDestroyed() || !win.isFocused()) return;
+let versionApi = true;
+let lastPollAt = 0;
+let lastListAt = 0;
+let asleep = false;
+
+async function poll({ force = false } = {}) {
+  if (polling || !primed || !auth.user() || asleep) return;
+  const focused = !!win && !win.isDestroyed() && win.isFocused();
+  if (!focused && !vault?.running) return;
+  if (!focused && !force && Date.now() - lastPollAt < POLL_BACKGROUND_MS) return;
   polling = true;
+  lastPollAt = Date.now();
   try {
+    if (versionApi) {
+      try {
+        const { version } = await request('GET', '/v1/version');
+        if (version === state.lastVersion) return;
+        state.lastVersion = version;
+      } catch (err) {
+        if (err.status !== 404) throw err;
+        versionApi = false; // older server
+      }
+    }
     const { items } = await request('GET', '/v1/audit', { query: { limit: 50 } });
-    const top = items[0]?.log_id ?? 0;
-    if (top === state.lastLogId) return;
-    state.lastLogId = applyAudit(writers, items, state.lastLogId);
-    // An agent created elsewhere (another device): learn its identity first.
-    if (items.some((r) => !state.agentRefs[r.agent_id])) await refreshAgents().catch(() => {});
-    saveState();
-    const changes = await resync();
-    send('kb:changed', { paths: changes.map((c) => c.rel), external: changes.some((c) => !isIndex(c.rel)) });
+    const prev = state.lastLogId;
+    const agentMoved = (items[0]?.log_id ?? 0) !== prev;
+    if (agentMoved) {
+      state.lastLogId = applyAudit(writers, items, prev);
+      // An agent created elsewhere (another device): learn its identity first.
+      if (items.some((r) => !state.agentRefs[r.agent_id])) await refreshAgents().catch(() => {});
+      saveState();
+    }
+    if (!versionApi && !agentMoved && !(vault?.running && Date.now() - lastListAt > LEGACY_LIST_MS)) return;
+    lastListAt = Date.now();
+    const agentPaths = versionApi ? new Set(items.filter((r) => r.log_id > prev).map((r) => r.target_path)) : undefined;
+    const changes = await resync({ agentPaths });
+    vault?.kick();
+    const notes = changes.filter((c) => !isIndex(c.rel));
+    if (changes.length) send('kb:changed', { paths: changes.map((c) => c.rel), external: notes.length > 0, source: notes.some((c) => agentPaths?.has(c.rel) ?? true) ? 'agent' : 'device' });
   } catch {
     /* offline or session gone: try again next tick */
   } finally {
@@ -283,7 +305,7 @@ async function poll() {
 // Pending deletes (undo window): contents are kept in memory and written
 // back on undo. The server has no trash, so after the window it's gone.
 // ---------------------------------------------------------------------------
-const pendingDeletes = new Map(); // token -> { rel, folders, contents }
+const pendingDeletes = new Map(); // token -> { rel, folders, contents, blobs }
 
 // ---------------------------------------------------------------------------
 // Search
@@ -308,9 +330,154 @@ function search(query) {
   return results.slice(0, 60);
 }
 
+// Raw link targets per note ([[wikilinks]], embeds, markdown links); the renderer resolves them.
+const LINK_RE = /!?\[\[([^\]\n]+)\]\]|\]\(\s*<([^>\n]+)>\s*\)|\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g;
+function linkIndex() {
+  const out = {};
+  for (const [rel, { content }] of cache) {
+    const targets = [];
+    for (const m of content.matchAll(LINK_RE)) targets.push(m[1] !== undefined ? `[[${m[1]}]]` : (m[2] ?? m[3]));
+    if (targets.length) out[rel] = targets;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
-// Agents (permissions live in the Worker's D1; tokens are shown once)
+// Local vault (vault.cjs): a folder kept in sync with the cloud, for Obsidian.
+// Per-user config and sync state live in userData/sync/<user id>/.
 // ---------------------------------------------------------------------------
+let vault = null;
+let vaultStarting = null;
+// Sandbox: access to the vault folder, held while the vault runs (from a security-scoped bookmark).
+let releaseVaultAccess = null;
+const pickedBookmarks = new Map(); // folder picked in this session -> bookmark (Mac App Store only)
+const syncDir = (userId) => path.join(app.getPath('userData'), 'sync', userId);
+// In the sandbox ~/Documents isn't reachable until the user picks a folder there.
+const defaultVaultRoot = () => (MAS ? null : path.join(app.getPath('documents'), 'Lore LLM'));
+
+function releaseAccess() {
+  releaseVaultAccess?.();
+  releaseVaultAccess = null;
+}
+const serverId = () => new URL(API_URL).host;
+
+function vaultConfig(userId) {
+  try {
+    return { linkFormat: 'markdown', ...JSON.parse(fs.readFileSync(path.join(syncDir(userId), 'config.json'), 'utf8')) };
+  } catch {
+    return { enabled: false, root: null, linkFormat: 'markdown' };
+  }
+}
+
+async function saveVaultConfig(userId, cfg) {
+  await fsp.mkdir(syncDir(userId), { recursive: true });
+  await fsp.writeFile(path.join(syncDir(userId), 'config.json'), JSON.stringify(cfg, null, 2));
+}
+
+function vaultStatus() {
+  const u = auth.user();
+  const cfg = u ? vaultConfig(u.id) : { enabled: false, root: null, linkFormat: 'markdown' };
+  const live = vault ? vault.status() : { state: 'off', pending: 0, lastSyncAt: null, unsynced: [], conflicts: [], error: null, confirm: null };
+  return { ...live, enabled: !!cfg.enabled, root: cfg.root ?? null, defaultRoot: defaultVaultRoot(), linkFormat: cfg.linkFormat };
+}
+
+async function startVault() {
+  if (vaultStarting) return vaultStarting;
+  vaultStarting = (async () => {
+    const u = auth.user();
+    if (!u) return;
+    const cfg = vaultConfig(u.id);
+    stopVault();
+    if (!cfg.enabled || !cfg.root) return;
+    // Never plan against an empty mirror: it would read as "everything was deleted".
+    await ensurePrimed();
+    if (auth.user()?.id !== u.id) return;
+    releaseAccess();
+    if (MAS && cfg.bookmark) releaseVaultAccess = app.startAccessingSecurityScopedResource(cfg.bookmark);
+    // Lore's local empty folders exist on disk too.
+    if (fs.existsSync(cfg.root)) for (const f of state.folders) await fsp.mkdir(path.join(cfg.root, ...f.split('/')), { recursive: true }).catch(() => {});
+    vault = new VaultSync({
+      root: cfg.root,
+      stateDir: syncDir(u.id),
+      userId: u.id,
+      server: serverId(),
+      mirror,
+      trash: (abs) => shell.trashItem(abs),
+      onEvent: onVaultEvent,
+      remoteLabel: (rel) => (authorOf(rel) === 'agent' ? agentRef(rel)?.name ?? 'agente' : 'cloud'),
+    });
+    await vault.start();
+  })().finally(() => {
+    vaultStarting = null;
+    send('vault:status', vaultStatus());
+  });
+  return vaultStarting;
+}
+
+function stopVault() {
+  vault?.stop();
+  vault = null;
+}
+
+function onVaultEvent(ev) {
+  switch (ev.type) {
+    case 'status':
+      send('vault:status', vaultStatus());
+      break;
+    case 'pushed':
+      recordOwnWrite(ev.rel, ev.etag);
+      if (ev.kind === 'md') recordChange(ev.rel, ev.before, ev.after, 'you', undefined, { source: 'obsidian', ...(ev.resurrect ? { note: 'Ricreato: era stato eliminato nel cloud mentre lo modificavi' } : {}) });
+      break;
+    case 'merged':
+      recordOwnWrite(ev.rel, ev.etag);
+      recordChange(ev.rel, ev.before, ev.after, 'you', undefined, { source: 'obsidian', note: 'Unione automatica con le modifiche arrivate dal cloud' });
+      break;
+    case 'conflict':
+      recordOwnWrite(ev.rel, ev.etag);
+      pushActivity({
+        path: ev.rel,
+        kind: 'conflict',
+        by: 'you',
+        source: 'obsidian',
+        copy: ev.copy,
+        note: `Hai modificato in Obsidian le stesse righe cambiate nel cloud. Il file tiene la tua versione; quella del cloud è in ${ev.copy}.`,
+        ...diffStats(ev.before, ev.after),
+        before: ev.before ?? null,
+        after: ev.after ?? null,
+      });
+      send('vault:conflict', { path: ev.rel, copy: ev.copy });
+      break;
+    case 'deleted':
+      delete state.authors[ev.rel];
+      saveState();
+      if (ev.before != null) recordChange(ev.rel, ev.before, null, 'you', undefined, { source: 'obsidian' });
+      break;
+    case 'moved':
+      if (state.authors[ev.from]) state.authors[ev.to] = ev.etag;
+      delete state.authors[ev.from];
+      saveState();
+      break;
+    case 'changed':
+      send('kb:changed', { paths: ev.paths, external: true, source: 'obsidian' });
+      break;
+    case 'folders': {
+      const next = [...ev.dirs].sort();
+      if (JSON.stringify(next) !== JSON.stringify([...state.folders].sort())) {
+        state.folders = next;
+        saveState();
+        send('kb:changed', { paths: [], external: false });
+      }
+      break;
+    }
+    case 'confirm':
+      send('vault:confirm-request', { count: ev.count, paths: ev.paths });
+      break;
+    case 'notice':
+      send('vault:notice', { message: ev.message });
+      break;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Window
 // ---------------------------------------------------------------------------
@@ -319,6 +486,12 @@ let allowClose = false;
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+}
+
+function focusWindow() {
+  if (!win || win.isDestroyed()) return createWindow();
+  if (win.isMinimized()) win.restore();
+  win.focus();
 }
 
 function createWindow() {
@@ -334,6 +507,8 @@ function createWindow() {
     ...(isMac
       ? { trafficLightPosition: { x: 18, y: 16 } }
       : { titleBarOverlay: { color: '#141316', symbolColor: '#faf9f5', height: 44 } }),
+    // Packaged apps take the icon from the bundle; this covers Linux windows and dev runs.
+    ...(isMac ? {} : { icon: path.join(__dirname, 'icon.png') }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -345,7 +520,7 @@ function createWindow() {
   if (DEV_URL) win.loadURL(DEV_URL);
   else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 
-  // Links in rendered markdown open in the system browser.
+  // Links in rendered markdown open in the system browser (obsidian:// in Obsidian).
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -357,7 +532,7 @@ function createWindow() {
   });
 
   // Coming back to the app: look for agent writes right away.
-  win.on('focus', () => poll());
+  win.on('focus', () => poll({ force: true }));
 
   // Let the renderer veto closing when the editor has unsaved changes.
   win.on('close', (e) => {
@@ -368,6 +543,37 @@ function createWindow() {
 }
 
 // ---------------------------------------------------------------------------
+// Deep links: lore://open?path=Project/note.md[&heading=...]
+// ---------------------------------------------------------------------------
+let pendingLink = null;
+
+function handleDeepLink(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return;
+  }
+  if (u.protocol !== 'lore:' || u.hostname !== 'open') return;
+  const p = u.searchParams.get('path');
+  if (!p) return;
+  const link = { path: p.replace(/^\/+/, ''), ...(u.searchParams.get('heading') ? { heading: u.searchParams.get('heading') } : {}) };
+  if (win && !win.isDestroyed() && !win.webContents.isLoading()) send('app:navigate', link);
+  else pendingLink = link;
+  if (app.isReady()) focusWindow();
+}
+
+app.on('open-url', (e, url) => {
+  e.preventDefault();
+  handleDeepLink(url);
+});
+app.on('second-instance', (_e, argv) => {
+  const url = argv.find((a) => a.startsWith('lore://'));
+  if (url) handleDeepLink(url);
+  else focusWindow();
+});
+
+// ---------------------------------------------------------------------------
 // IPC
 // ---------------------------------------------------------------------------
 function handle(channel, fn) {
@@ -376,17 +582,22 @@ function handle(channel, fn) {
 
 // `fresh`: re-list the server first (manual refresh) instead of using the mirror.
 handle('kb:tree', async (fresh) => {
-  if (primed && fresh) await resync();
-  else await ensurePrimed();
+  if (primed && fresh) {
+    await resync();
+    vault?.kick();
+  } else await ensurePrimed();
   return buildTree();
 });
 
 handle('kb:read', async (rel) => {
   await ensurePrimed();
   const before = cache.get(rel)?.content ?? null;
-  const f = await fetchFile(rel);
+  const f = await mirror.fetchFile(rel);
   // Opening a file is also a chance to notice an agent edit.
-  if (before !== null && before !== f.content && state.authors[rel] !== f.etag) recordChange(rel, before, f.content, 'agent', agentRef(rel));
+  if (before !== null && before !== f.content && state.authors[rel] !== f.etag) {
+    recordChange(rel, before, f.content, 'agent', agentRef(rel));
+    vault?.kick();
+  }
   const mtime = Date.parse(f.uploaded);
   const author = authorOf(rel);
   return { path: rel, content: f.content, mtime, size: f.size, birthtime: mtime, author, agent: author === 'agent' ? agentRef(rel) : undefined };
@@ -394,56 +605,48 @@ handle('kb:read', async (rel) => {
 
 handle('kb:write', async (rel, content) => {
   const before = cache.get(rel)?.content ?? null;
-  const res = await request('PUT', '/v1/file', {
-    query: { path: rel },
-    body: { content, overwrite: true, ...(cache.get(rel) ? { if_match: cache.get(rel).etag } : {}) },
-  });
-  cache.set(rel, { etag: res.file.etag, content });
-  files.set(rel, res.file);
-  recordOwnWrite(rel, res.file.etag);
+  const file = await mirror.putText(rel, content, { overwrite: true, ifMatch: cache.get(rel)?.etag });
+  recordOwnWrite(rel, file.etag);
   recordChange(rel, before, content, 'you');
   await resync();
+  vault?.kick();
   return true;
 });
 
 handle('kb:create', async (rel, content) => {
   checkFilePath(rel);
-  const res = await request('PUT', '/v1/file', { query: { path: rel }, body: { content, overwrite: false } });
-  cache.set(rel, { etag: res.file.etag, content });
-  files.set(rel, res.file);
-  recordOwnWrite(rel, res.file.etag);
+  const file = await mirror.putText(rel, content, { overwrite: false });
+  recordOwnWrite(rel, file.etag);
   recordChange(rel, null, content, 'you');
   await resync();
+  vault?.kick();
   return true;
 });
 
-// Object storage has no empty folders: they live here until a file is put in them.
+// Object storage has no empty folders: they live here (and in the vault) until a file is put in them.
 handle('kb:mkdir', async (rel) => {
   if (state.folders.includes(rel) || filesUnder(rel).length) throw new Error('Esiste già una cartella con questo nome');
   state.folders.push(rel);
   saveState();
+  await vault?.mkdirLocal(rel);
   return true;
 });
 
 handle('kb:rename', async (fromRel, toRel) => {
-  if (files.has(toRel) || filesUnder(toRel).length || state.folders.includes(toRel)) throw new Error('Esiste già un elemento con questo nome');
-  const moved = files.has(fromRel) ? [fromRel] : filesUnder(fromRel);
+  if (mirror.has(toRel) || filesUnder(toRel).length || state.folders.includes(toRel)) throw new Error('Esiste già un elemento con questo nome');
+  const moved = mirror.has(fromRel) ? [fromRel] : filesUnder(fromRel);
   const mine = new Set(moved.filter((k) => authorOf(k) === 'you'));
-  if (moved.length) await request('POST', '/v1/files/move', { body: { from: fromRel, to: toRel } });
+  // The mirror carries contents over, so the move doesn't look like an agent edit.
+  if (moved.length) await mirror.move(fromRel, toRel);
   state.folders = state.folders.map((f) => (under(f, fromRel) ? toRel + f.slice(fromRel.length) : f));
   for (const k of moved) {
     const nk = toRel + k.slice(fromRel.length);
-    // Carry content over so the move doesn't look like an agent edit.
-    if (cache.has(k)) cache.set(nk, cache.get(k));
-    cache.delete(k);
     delete state.authors[k];
-  }
-  await sync();
-  for (const k of mine) {
-    const nk = toRel + k.slice(fromRel.length);
-    if (files.has(nk)) state.authors[nk] = files.get(nk).etag;
+    if (mine.has(k) && mirror.files.has(nk)) state.authors[nk] = mirror.files.get(nk).etag;
   }
   saveState();
+  await vault?.renameLocal(fromRel, toRel);
+  vault?.kick();
   return true;
 });
 
@@ -455,22 +658,30 @@ handle('kb:duplicate', async (rel) => {
   do {
     target = `${base} copia${n > 1 ? ' ' + n : ''}.md`;
     n++;
-  } while (files.has(target));
-  const content = cache.get(rel)?.content ?? (await fetchFile(rel)).content;
-  const res = await request('PUT', '/v1/file', { query: { path: target }, body: { content, overwrite: false } });
-  cache.set(target, { etag: res.file.etag, content });
-  files.set(target, res.file);
-  recordOwnWrite(target, res.file.etag);
+  } while (mirror.has(target));
+  const content = cache.get(rel)?.content ?? (await mirror.fetchFile(rel)).content;
+  const file = await mirror.putText(target, content, { overwrite: false });
+  recordOwnWrite(target, file.etag);
   recordChange(target, null, content, 'you');
   await resync();
+  vault?.kick();
   return target;
 });
 
 // Delete = keep the contents in memory, remove on the server; undo writes them back.
 handle('kb:delete', async (rel) => {
-  const isFile = files.has(rel);
+  const isFile = mirror.has(rel);
   const affected = isFile ? [rel] : filesUnder(rel);
-  const contents = Object.fromEntries(affected.filter((k) => !isIndex(k)).map((k) => [k, cache.get(k)?.content ?? '']));
+  const contents = Object.fromEntries(affected.filter((k) => isMd(k) && !isIndex(k)).map((k) => [k, cache.get(k)?.content ?? '']));
+  // Attachments come back from undo only if their bytes could be kept.
+  const blobs = {};
+  for (const k of affected.filter((k) => !isMd(k))) {
+    try {
+      blobs[k] = (await mirror.readBlob(k)).buffer;
+    } catch {
+      /* best effort */
+    }
+  }
   const folders = isFile ? [] : [...new Set([...state.folders.filter((f) => under(f, rel)), rel])];
   if (isFile) await request('DELETE', '/v1/file', { query: { path: rel } });
   else if (affected.length) await request('DELETE', '/v1/folder', { query: { path: rel } });
@@ -478,14 +689,17 @@ handle('kb:delete', async (rel) => {
   for (const k of affected) {
     const before = cache.get(k)?.content ?? null;
     cache.delete(k);
-    files.delete(k);
+    mirror.files.delete(k);
+    mirror.attachments.delete(k);
     delete state.authors[k];
-    if (!isIndex(k)) recordChange(k, before, null, 'you');
+    if (isMd(k) && !isIndex(k)) recordChange(k, before, null, 'you');
   }
   saveState();
   await resync();
+  if (!isFile) await vault?.trashLocalFolder(rel);
+  vault?.kick();
   const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  pendingDeletes.set(token, { rel, folders, contents });
+  pendingDeletes.set(token, { rel, folders, contents, blobs });
   setTimeout(() => pendingDeletes.delete(token), 60_000);
   return token;
 });
@@ -494,22 +708,24 @@ handle('kb:undoDelete', async (token) => {
   const d = pendingDeletes.get(token);
   if (!d) return false;
   pendingDeletes.delete(token);
-  if (files.has(d.rel) || filesUnder(d.rel).length) throw new Error('Un elemento con lo stesso nome è stato ricreato');
+  if (mirror.has(d.rel) || filesUnder(d.rel).length) throw new Error('Un elemento con lo stesso nome è stato ricreato');
   for (const [k, content] of Object.entries(d.contents)) {
-    const res = await request('PUT', '/v1/file', { query: { path: k }, body: { content, overwrite: false } });
-    cache.set(k, { etag: res.file.etag, content });
-    files.set(k, res.file);
-    recordOwnWrite(k, res.file.etag);
+    const file = await mirror.putText(k, content, { overwrite: false });
+    recordOwnWrite(k, file.etag);
     recordChange(k, null, content, 'you');
   }
+  for (const [k, buf] of Object.entries(d.blobs)) await mirror.putBlob(k, buf, { overwrite: false });
   // Empty folders come back as local folders.
   for (const f of d.folders) if (!filesUnder(f).length && !state.folders.includes(f)) state.folders.push(f);
   saveState();
   await resync();
+  for (const f of d.folders) await vault?.mkdirLocal(f);
+  vault?.kick();
   return true;
 });
 
 handle('kb:search', (q) => search(q));
+handle('kb:links', () => linkIndex());
 handle('kb:activity', () => state.activity);
 handle('kb:markActivitySeen', () => {
   state.lastSeenActivity = Date.now();
@@ -547,6 +763,161 @@ handle('audit:list', async (opts = {}) => {
   };
 });
 
+// --- local vault -------------------------------------------------------------
+handle('vault:status', () => vaultStatus());
+
+handle('vault:chooseRoot', async () => {
+  const res = await dialog.showOpenDialog(win, {
+    title: 'Cartella per la copia locale',
+    defaultPath: app.getPath('documents'),
+    properties: ['openDirectory', 'createDirectory'],
+    // Mac App Store: keep access to the folder across launches.
+    ...(MAS ? { securityScopedBookmarks: true } : {}),
+  });
+  if (res.canceled) return null;
+  if (MAS && res.bookmarks?.[0]) pickedBookmarks.set(res.filePaths[0], res.bookmarks[0]);
+  return res.filePaths[0];
+});
+
+// Dry run for a folder about to become the vault: what would move where.
+handle('vault:preview', async (root) => {
+  const u = auth.user();
+  if (!u) throw new Error('Accesso richiesto');
+  await ensurePrimed();
+  if (!root && !defaultVaultRoot()) return { ok: false, root: '', error: 'Scegli una cartella per la copia locale.' };
+  const abs = path.resolve(root || defaultVaultRoot());
+  const exists = fs.existsSync(abs);
+  let marker = null;
+  try {
+    marker = JSON.parse(fs.readFileSync(path.join(abs, '.lore-sync', 'vault.json'), 'utf8'));
+  } catch {
+    /* not a vault yet */
+  }
+  if (marker && (marker.userId !== u.id || marker.server !== serverId())) {
+    return { ok: false, root: abs, error: 'Questa cartella è la copia locale di un altro account: scegline un\'altra.' };
+  }
+  const visible = exists ? fs.readdirSync(abs).filter((n) => !n.startsWith('.')) : [];
+  const scan = visible.length ? await scanVault(abs, {}) : { files: new Map(), unsynced: [] };
+  const actions = planSync({ manifest: {}, remote: mirror.snapshot(), local: scan.files, caseInsensitive: process.platform !== 'linux' });
+  const count = (type) => actions.filter((a) => a.type === type).length;
+  return {
+    ok: true,
+    root: abs,
+    exists,
+    empty: visible.length === 0,
+    resume: !!marker,
+    download: count('pull'),
+    upload: count('push'),
+    merge: count('merge'),
+    same: count('adopt'),
+    unsynced: scan.unsynced.length,
+  };
+});
+
+handle('vault:enable', async ({ root, linkFormat = 'markdown' } = {}) => {
+  const u = auth.user();
+  if (!u) throw new Error('Accesso richiesto');
+  if (!root && !defaultVaultRoot()) throw new Error('Scegli una cartella per la copia locale');
+  const abs = path.resolve(root || defaultVaultRoot());
+  if (under(abs, app.getPath('userData'))) throw new Error('Scegli una cartella fuori dai dati dell\'app');
+  const prev = vaultConfig(u.id);
+  const bookmark = pickedBookmarks.get(abs) ?? (prev.root === abs ? prev.bookmark : undefined);
+  if (MAS && !bookmark) throw new Error('Scegli di nuovo la cartella con «Scegli…» per darle accesso');
+  await fsp.mkdir(abs, { recursive: true });
+  await obsidian.writeDefaultConfig(abs, { linkFormat });
+  await saveVaultConfig(u.id, { enabled: true, root: abs, linkFormat, ...(bookmark ? { bookmark } : {}) });
+  await startVault();
+  return vaultStatus();
+});
+
+handle('vault:disable', async ({ deleteLocal = false } = {}) => {
+  const u = auth.user();
+  if (!u) return vaultStatus();
+  const cfg = vaultConfig(u.id);
+  if (vault) {
+    await vault.flush({ timeoutMs: 5000 });
+    stopVault();
+  }
+  await saveVaultConfig(u.id, { ...cfg, enabled: false });
+  if (deleteLocal && cfg.root) {
+    // Still inside the sandbox grant: released right after.
+    await shell.trashItem(cfg.root).catch(() => {});
+    await fsp.rm(path.join(syncDir(u.id), 'manifest.json'), { force: true });
+    await fsp.rm(path.join(syncDir(u.id), 'bases'), { recursive: true, force: true });
+  }
+  releaseAccess();
+  send('vault:status', vaultStatus());
+  return vaultStatus();
+});
+
+handle('vault:syncNow', async () => {
+  if (primed) await resync();
+  if (vault) await vault.syncNow();
+  else await startVault();
+  return vaultStatus();
+});
+
+handle('vault:confirm', async (answer) => {
+  await vault?.confirm(answer);
+  return vaultStatus();
+});
+
+handle('vault:reveal', async (rel) => {
+  const cfg = auth.user() ? vaultConfig(auth.user().id) : null;
+  if (!cfg?.root) return false;
+  if (rel && vault) shell.showItemInFolder(vault.abs(rel));
+  else await shell.openPath(cfg.root);
+  return true;
+});
+
+handle('vault:setLinkFormat', async (linkFormat) => {
+  const u = auth.user();
+  if (!u) return vaultStatus();
+  const cfg = vaultConfig(u.id);
+  await saveVaultConfig(u.id, { ...cfg, linkFormat });
+  if (cfg.root && fs.existsSync(cfg.root)) await obsidian.setLinkFormat(cfg.root, linkFormat);
+  return vaultStatus();
+});
+
+handle('obsidian:status', () => {
+  const cfg = auth.user() ? vaultConfig(auth.user().id) : {};
+  return {
+    installed: obsidian.isInstalled({ protocolApp: app.getApplicationNameForProtocol('obsidian://open'), home: app.getPath('home') }),
+    registered: cfg.root ? obsidian.isRegistered(cfg.root, app.getPath('appData')) : false,
+  };
+});
+
+// Open a note (or the whole vault) in Obsidian. Pending local writes land first.
+handle('obsidian:open', async (rel) => {
+  if (!vault?.running) throw new Error('Attiva prima la copia locale per Obsidian');
+  let target = vault.root;
+  if (rel) {
+    await vault.flush({ timeoutMs: 3000 });
+    if (fs.existsSync(vault.abs(rel))) target = vault.abs(rel);
+  }
+  await shell.openExternal(obsidian.openUri(target));
+  return true;
+});
+
+handle('obsidian:launch', () => shell.openExternal('obsidian://open'));
+
+// Attachments that the window can't show inline (PDF) open in the system viewer.
+handle('app:openAttachment', async (rel) => {
+  if (vault?.running && fs.existsSync(vault.abs(rel))) return shell.openPath(vault.abs(rel));
+  const { buffer } = await mirror.readBlob(rel);
+  const dir = path.join(app.getPath('temp'), 'lore-attachments');
+  await fsp.mkdir(dir, { recursive: true });
+  const file = path.join(dir, path.basename(rel));
+  await fsp.writeFile(file, buffer);
+  return shell.openPath(file);
+});
+
+handle('app:takePendingLink', () => {
+  const link = pendingLink;
+  pendingLink = null;
+  return link;
+});
+
 handle('app:server', () => new URL(API_URL).host);
 handle('app:prefs', () => state.prefs);
 handle('app:setPrefs', (prefs) => {
@@ -562,8 +933,8 @@ handle('app:confirmClose', () => {
 });
 
 handle('auth:user', () => auth.user());
-handle('auth:signIn', async () => {
-  const u = await auth.signIn();
+handle('auth:signIn', async (provider) => {
+  const u = await auth.signIn(provider);
   // The browser had focus during login; bring the app back.
   if (win && !win.isDestroyed()) {
     if (win.isMinimized()) win.restore();
@@ -572,20 +943,92 @@ handle('auth:signIn', async () => {
   return u;
 });
 handle('auth:cancelSignIn', () => auth.cancelSignIn());
-handle('auth:signOut', () => auth.signOut());
+// Local edits still on their way up are flushed first; the vault folder stays on disk.
+handle('auth:signOut', async () => {
+  if (vault) {
+    await vault.flush({ timeoutMs: 5000 });
+    stopVault();
+  }
+  return auth.signOut();
+});
+
+// ---------------------------------------------------------------------------
+// Attachments for the renderer: from the vault when it's on, else downloaded
+// once and cached by etag.
+// ---------------------------------------------------------------------------
+async function serveAsset(req) {
+  const notFound = () => new Response('Not found', { status: 404 });
+  let rel;
+  try {
+    rel = new URL(req.url).pathname.replace(/^\/+/, '').split('/').map(decodeURIComponent).join('/');
+  } catch {
+    return notFound();
+  }
+  const type = mimeOf(rel);
+  if (kindOf(rel) !== 'bin' || !type || rel.split('/').some((s) => s === '..' || s === '')) return notFound();
+  const headers = { 'content-type': type, 'cache-control': 'no-cache' };
+  try {
+    if (vault?.running) {
+      const buf = await fsp.readFile(vault.abs(rel)).catch(() => null);
+      if (buf) return new Response(buf, { headers });
+    }
+    const meta = mirror.attachments.get(rel);
+    if (!meta) return notFound();
+    const cached = path.join(app.getPath('userData'), 'assets', `${meta.etag}.${rel.slice(rel.lastIndexOf('.') + 1).toLowerCase()}`);
+    let buf = await fsp.readFile(cached).catch(() => null);
+    if (!buf) {
+      buf = (await mirror.readBlob(rel)).buffer;
+      await fsp.mkdir(path.dirname(cached), { recursive: true });
+      await fsp.writeFile(cached, buf);
+    }
+    return new Response(buf, { headers });
+  } catch {
+    return notFound();
+  }
+}
 
 // ---------------------------------------------------------------------------
 app.whenReady().then(() => {
   loadState();
+  // `electron .` shows Electron's own icon in the Dock; the packaged app has the 1c icon in its bundle.
+  if (isMac && !app.isPackaged) app.dock?.setIcon(path.join(__dirname, 'icon.png'));
+  protocol.handle('lore-asset', serveAsset);
+  if (process.defaultApp) app.setAsDefaultProtocolClient('lore', process.execPath, [path.resolve(process.argv[1] ?? '.')]);
+  else app.setAsDefaultProtocolClient('lore');
   auth.init((u) => {
     onUser(u);
     send('auth:changed', u);
   });
   onUser(auth.user());
   setInterval(poll, POLL_MS);
+  // Retry a vault that couldn't start (offline at launch).
+  setInterval(() => {
+    const u = auth.user();
+    if (u && !vault && !vaultStarting && vaultConfig(u.id).enabled) startVault().catch(() => {});
+  }, POLL_BACKGROUND_MS);
+  powerMonitor.on('suspend', () => (asleep = true));
+  powerMonitor.on('resume', () => {
+    asleep = false;
+    poll({ force: true });
+    vault?.kick(2000);
+  });
   createWindow();
+  const initial = process.argv.find((a) => a.startsWith('lore://'));
+  if (initial) handleDeepLink(initial);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+// Quitting: let the vault push what's still pending (bounded).
+let quitting = false;
+app.on('before-quit', (e) => {
+  if (quitting || !vault) return;
+  e.preventDefault();
+  quitting = true;
+  vault.flush({ timeoutMs: 4000 }).finally(() => {
+    stopVault();
+    app.quit();
   });
 });
 

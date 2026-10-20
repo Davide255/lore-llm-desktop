@@ -4,7 +4,7 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { basename, findNode, projectOf, relTime } from '../kb/paths';
 import type { ActivityEvent } from '../kb/types';
-import { Btn, FilterPill, Hover, Pill } from '../ui/primitives';
+import { Btn, FilterPill, Hover, Icon, Pill } from '../ui/primitives';
 import { AuthorAvatar } from '../ui/identity';
 import { EmptyState } from './common';
 
@@ -21,9 +21,13 @@ function dayLabel(ms: number) {
 
 // "Claude ha creato" / "Hai creato": every row says who did it.
 const verb = (e: ActivityEvent) => {
+  if (e.kind === 'conflict') return 'Conflitto su';
   const v = e.kind === 'created' ? 'creato' : e.kind === 'deleted' ? 'eliminato' : 'modificato';
   return e.by === 'you' ? `Hai ${v}` : `${e.agent?.name ?? 'Un agente'} ha ${v}`;
 };
+
+/** Where one of your own changes was made, when not in Lore. */
+const via = (e: ActivityEvent) => (e.source === 'obsidian' ? 'in Obsidian' : e.source === 'device' ? 'da un altro dispositivo' : null);
 
 export function ActivityScreen({ id }: { id?: string }) {
   const app = useApp();
@@ -91,6 +95,7 @@ function EventRow({ e, on, onPress }: { e: ActivityEvent; on: boolean; onPress: 
         </Text>
         <Text numberOfLines={1} style={t(400, 12, 1.35, { color: c.ink3, marginTop: 3 })}>
           {projectOf(e.path) ?? 'Radice'} · {relTime(e.at)}
+          {via(e) ? ` · ${via(e)}` : ''}
         </Text>
         {e.added || e.removed ? (
           <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
@@ -166,12 +171,16 @@ function EventDetail({ e }: { e: ActivityEvent }) {
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
         <AuthorAvatar author={e.by} agent={e.agent} size={36} />
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={t(600, 16, 1.3, { letterSpacing: -0.24 })}>{agent ? `Modifica di ${e.agent?.name ?? 'un agente'}` : 'Tua modifica'}</Text>
+          <Text style={t(600, 16, 1.3, { letterSpacing: -0.24 })}>
+            {e.kind === 'conflict' ? 'Modifiche in conflitto' : agent ? `Modifica di ${e.agent?.name ?? 'un agente'}` : via(e) ? `Tua modifica ${via(e)}` : 'Tua modifica'}
+          </Text>
           <Text numberOfLines={1} style={t(400, 12, 1.3, { color: c.ink3, marginTop: 2 })}>
-            <Text style={{ fontFamily: font.mono }}>{basename(e.path)}</Text> · {projectOf(e.path) ?? 'Radice'} · {relTime(e.at)} · {e.kind === 'created' ? 'creazione' : e.kind === 'deleted' ? 'eliminazione' : 'modifica'}
+            <Text style={{ fontFamily: font.mono }}>{basename(e.path)}</Text> · {projectOf(e.path) ?? 'Radice'} · {relTime(e.at)} ·{' '}
+            {e.kind === 'created' ? 'creazione' : e.kind === 'deleted' ? 'eliminazione' : e.kind === 'conflict' ? 'conflitto' : 'modifica'}
           </Text>
         </View>
-        {e.kind !== 'created' || exists ? <Btn icon="history" label={e.kind === 'created' ? 'Elimina file' : 'Ripristina'} onPress={restore} /> : null}
+        {e.kind === 'conflict' && e.copy && findNode(app.tree, e.copy) ? <Btn icon="difference" label="Apri copia del cloud" onPress={() => app.navigate({ name: 'file', path: e.copy! })} /> : null}
+        {e.kind !== 'created' || exists ? <Btn icon="history" label={e.kind === 'created' ? 'Elimina file' : e.kind === 'conflict' ? 'Usa la versione del cloud' : 'Ripristina'} onPress={restore} /> : null}
         {exists ? <Btn variant="primary" label="Apri file" onPress={() => app.navigate({ name: 'file', path: e.path })} /> : null}
       </View>
 
@@ -201,8 +210,17 @@ function EventDetail({ e }: { e: ActivityEvent }) {
         {!e.hunks.length ? <Text style={[diffCell, { color: c.ink3 }]}>Nessuna differenza di contenuto.</Text> : null}
       </View>
 
+      {e.note ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: radius.md, backgroundColor: e.kind === 'conflict' ? c.warning14 : c.fill04 }}>
+          <Icon name={e.kind === 'conflict' ? 'sync_problem' : 'merge'} size={17} color={e.kind === 'conflict' ? c.warning : c.ink2} />
+          <Text style={[t(400, 13, 1.45, { color: c.ink }), { flex: 1 }]}>{e.note}</Text>
+        </View>
+      ) : null}
+
       <Text style={t(400, 12, 1.5, { color: c.ink3 })}>
-        {e.kind === 'created'
+        {e.kind === 'conflict'
+          ? '“Prima” è la versione arrivata dal cloud, “Dopo” quella che hai tenuto. La versione del cloud è anche salvata in una copia accanto al file.'
+          : e.kind === 'created'
           ? 'Il file è stato creato con questa modifica: “Elimina file” lo rimuove (con possibilità di annullare).'
           : 'Il ripristino riscrive il file con la versione “Prima”. Anche il ripristino compare in Attività e può essere annullato allo stesso modo.'}
       </Text>

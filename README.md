@@ -5,18 +5,42 @@ Claude Design file *KB Desktop* (Athly design system, dark).
 
 ## Knowledge base model
 
-- The KB is a folder; each subfolder is a **project**.
+- The KB lives in your cloud space on the Lore server; each top-level folder is a **project**.
 - `index.md` — compiled by the agents. Read-only here: it can be opened and shared, never edited.
   After you change a project's files, its card shows *In attesa di rigenerazione…* until the index is rewritten.
 - `checklist.md` — sections (`## …`) of items and sub-items (`- [ ]` / `- [x]`, tab- or space-indented).
   In reading mode a click toggles an item and rewrites only that line; items and sub-items can be added,
   renamed and deleted inline (with undo). `Modifica` opens the raw file.
 - Every other `.md` file and folder can be created, edited, renamed, moved, duplicated and deleted.
-  Deleting is undoable for 10 s (⌘Z / toast), and a copy always goes to the OS trash.
+  Deleting is undoable for 10 s (⌘Z / toast).
+- Images and PDFs (`png jpg gif webp svg pdf`, ≤ 10 MB) can sit next to notes as **attachments**: they render
+  inline (`![](img/a.png)`, `![[a.png|300]]`) and open in their own view. Agents see them listed, not their bytes.
+- Links: markdown links (relative or KB-root relative), bare `name.md` mentions and Obsidian `[[wikilinks]]`
+  (`[[Note#Heading|alias]]`). *Citato da* lists the notes that link to a file.
 
-External writes (agents) are picked up by a file watcher: open views refresh, and each write lands in
-**Attività** with a side-by-side diff and *Ripristina*. The agents registry in *Impostazioni → Agenti* is
-stored in `<kb>/.lore/agents.json` so an MCP server can read it; enforcing it is up to that server.
+Changes made elsewhere (agents over MCP, your other devices) are found by polling the server's change
+cursor (`/v1/version`): open views refresh, and each change lands in **Attività** with a side-by-side diff
+and *Ripristina*.
+
+## Obsidian
+
+*Impostazioni → Obsidian* turns on a **local copy** of the KB: a plain folder (default `~/Documents/Lore LLM`)
+that `electron/vault.cjs` keeps in two-way sync with the cloud. Open it in Obsidian as a vault; notes you
+save there reach the agents in a few seconds, and their edits land in Obsidian (also while Lore runs in the
+background). *Apri in Obsidian* opens the current note; *Editor predefinito* can make Obsidian the editor for
+`Modifica`/`E`/double click.
+
+- Local edits are pushed with the etag last synced; if the cloud changed meanwhile the two versions are
+  **three-way merged** (`electron/merge.cjs`). Overlapping edits keep yours in the file and save the cloud's as
+  `name (conflitto … ).md`, with an entry in Attività.
+- Renames and folder moves are recognised (same content, new path) and become server moves, in both directions.
+- `index.md` is written read-only and any local edit is reverted. Files that can't sync (outside a project,
+  other types, too large) stay local and are listed in the settings page.
+- Cloud deletions go to the OS trash. If many files vanish locally at once, sync pauses and asks.
+- Sync state (manifest + merge bases) lives in `<userData>/sync/<user>/`, outside the vault; the vault only
+  holds `.lore-sync/vault.json`, which ties it to one account. Lore writes `.obsidian/app.json` once, for a
+  folder Obsidian has never opened (markdown links, attachments next to the note).
+- `lore://open?path=Project/note.md` opens a note in Lore.
 
 ## Stack
 
@@ -27,7 +51,7 @@ stored in `<kb>/.lore/agents.json` so an MCP server can read it; enforcing it is
   implementing the same `LoreBridge` interface as a native module (requires Visual Studio 2022 / Xcode).
 
 ```
-electron/        main process (fs, watcher, activity/diff, undoable delete) + preload bridge
+electron/        main process (cloud mirror, activity/diff, undoable delete, local vault sync, Obsidian) + preload bridge
 src/kb/          bridge, types, path rules, checklist parser/editor (+ tests)
 src/state/       app state, routing with unsaved-changes guard, item actions & shortcuts
 src/screens/     Projects, Folder, Document/index.md, Checklist, Editor, Activity, Settings
@@ -43,7 +67,7 @@ npm install
 npm run dev        # Vite + Electron with hot reload
 npm run build      # typecheck + production bundle in dist/
 npm start          # run Electron on the built bundle
-npm test           # checklist parser + agent mapping/attribution tests
+npm test           # checklist, links, agents, mirror, merge, vault sync and Obsidian tests (Node ≥ 22.18; on older 22.x add --experimental-strip-types)
 npm run test:ui    # renderer in headless Chrome with a fake bridge (LORE_UI_SHOTS=<dir> saves screenshots)
 npm run dist       # installer via electron-builder (release/)
 ```

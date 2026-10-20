@@ -4,7 +4,7 @@ import { c, font, t, web } from '../theme';
 import { useApp, type Route } from '../state/app';
 import { Hover, Icon, isMac } from '../ui/primitives';
 
-const SETTINGS_LABEL = { account: 'Account', general: 'Generale', editor: 'Editor', agents: 'Agenti', shortcuts: 'Scorciatoie' } as const;
+const SETTINGS_LABEL = { account: 'Account', general: 'Generale', editor: 'Editor', obsidian: 'Obsidian', agents: 'Agenti', shortcuts: 'Scorciatoie' } as const;
 
 function crumbs(route: Route): { label: string; mono?: boolean; to?: Route }[] {
   switch (route.name) {
@@ -33,12 +33,21 @@ export function TitleBar() {
   // Before login there is no knowledge base: no sidebar toggle, breadcrumbs or sync state.
   const inside = !!app.user && app.loaded;
   const list = inside ? crumbs(app.route) : [{ label: 'Lore LLM Desktop' }];
-  const sync = {
+  const source = app.changedSource === 'obsidian' ? 'da Obsidian' : app.changedSource === 'device' ? 'da un altro dispositivo' : 'da un agente';
+  let sync: { icon: string; label: string; color: string } = {
     synced: { icon: 'cloud_done', label: 'Sincronizzato', color: c.ink3 },
     saving: { icon: 'sync', label: 'Salvataggio…', color: c.ink3 },
-    external: { icon: 'bolt', label: 'Aggiornato da un agente', color: c.info },
+    external: { icon: 'bolt', label: `Aggiornato ${source}`, color: c.info },
     error: { icon: 'cloud_off', label: 'Errore di scrittura', color: c.error },
   }[app.sync];
+  // The local vault's own trouble shows when nothing more urgent is going on.
+  const v = app.vault;
+  if (app.sync === 'synced' && v?.enabled) {
+    if (v.state === 'syncing' && v.pending > 0) sync = { icon: 'sync', label: 'Sincronizzo la copia locale…', color: c.ink3 };
+    else if (v.state === 'offline') sync = { icon: 'cloud_off', label: 'Offline: le modifiche locali sono in attesa', color: c.warning };
+    else if (v.state === 'paused:confirm' || v.state === 'paused:auth' || v.state === 'error') sync = { icon: 'sync_problem', label: 'Copia locale in pausa', color: c.warning };
+  }
+  const vaultTrouble = !!v?.enabled && v.state !== 'idle' && v.state !== 'syncing';
 
   return (
     <View
@@ -81,10 +90,13 @@ export function TitleBar() {
       </View>
       <View style={{ flex: 1 }} />
       {inside ? (
-        <>
+        <Hover
+          onPress={vaultTrouble ? () => app.navigate({ name: 'settings', section: 'obsidian' }) : undefined}
+          style={[{ flexDirection: 'row', alignItems: 'center', gap: 8 }, web({ WebkitAppRegion: 'no-drag', cursor: vaultTrouble ? 'pointer' : 'default' })]}
+        >
           <Icon name={sync.icon} size={17} color={sync.color} />
           <Text style={t(400, 12, 1, { color: sync.color })}>{sync.label}</Text>
-        </>
+        </Hover>
       ) : null}
     </View>
   );

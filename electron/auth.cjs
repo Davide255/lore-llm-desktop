@@ -1,4 +1,4 @@
-// Sign in with Google, brokered by AWS Cognito (the same user pool the
+// Sign in with Google or Apple, brokered by AWS Cognito (the same user pool the
 // lore-llm Worker trusts). Authorization Code + PKCE in the system browser,
 // callback caught by a short-lived loopback server. Tokens never reach the
 // renderer: they stay in the main process, encrypted at rest with safeStorage.
@@ -18,6 +18,8 @@ const PORT = Number(process.env.LORE_AUTH_PORT || 42813);
 const REDIRECT_URI = `http://localhost:${PORT}/callback`;
 const SCOPES = 'openid email profile';
 const LOGIN_TIMEOUT_MS = 5 * 60_000;
+// Identity providers configured on the user pool (Cognito's names for them).
+const PROVIDERS = { google: 'Google', apple: 'SignInWithApple' };
 
 const storePath = () => path.join(app.getPath('userData'), 'lore-auth.bin');
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
@@ -69,8 +71,19 @@ function user() {
   // name only (add the family name) or already the full name (keep it).
   const first = p.given_name || p.name;
   const full = !first ? p.family_name : !p.family_name || first.includes(p.family_name) ? first : `${first} ${p.family_name}`;
-  const name = full || p.email || 'Account Google';
-  return { id: p.sub, name, email: p.email ?? null };
+  // Federated users carry the provider they came from (Cognito's `identities` claim).
+  let ids = p.identities;
+  if (typeof ids === 'string') {
+    try {
+      ids = JSON.parse(ids);
+    } catch {
+      ids = [];
+    }
+  }
+  const provider = Array.isArray(ids) && ids[0]?.providerName === PROVIDERS.apple ? 'apple' : 'google';
+  // Apple shares the name only on the very first sign-in, and may hide the email behind a relay.
+  const name = full || p.email || (provider === 'apple' ? 'Account Apple' : 'Account Google');
+  return { id: p.sub, name, email: p.email ?? null, provider };
 }
 
 async function tokenRequest(params) {
@@ -157,7 +170,10 @@ const page = (title, body) =>
   `<body style="font:15px system-ui;background:#121211;color:#faf9f5;display:grid;place-items:center;height:100vh;margin:0">` +
   `<div style="text-align:center"><h2 style="margin:0 0 8px">${title}</h2><p style="color:#a3a29c;margin:0">${body}</p></div>`;
 
-async function signIn() {
+/** `provider`: 'google' | 'apple'. */
+async function signIn(provider = 'google') {
+  const identityProvider = PROVIDERS[provider];
+  if (!identityProvider) throw new Error(`Provider di accesso sconosciuto: ${provider}`);
   if (!CLIENT_ID) throw new Error('Login non configurato: imposta LORE_COGNITO_CLIENT_ID.');
   pendingLogin?.cancel('superseded');
 
@@ -212,7 +228,7 @@ async function signIn() {
           client_id: CLIENT_ID,
           redirect_uri: REDIRECT_URI,
           scope: SCOPES,
-          identity_provider: 'Google',
+          identity_provider: identityProvider,
           state,
           code_challenge: challenge,
           code_challenge_method: 'S256',

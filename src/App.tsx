@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { Text, View } from 'react-native';
-import { c, font, t, web } from './theme';
+import { c, font, radius, t, web } from './theme';
 import { AppProvider, currentDir, useApp } from './state/app';
 import { handleItemShortcut } from './state/actions';
 import { fileKind } from './kb/paths';
@@ -11,12 +11,14 @@ import { FolderScreen } from './screens/FolderScreen';
 import { DocumentScreen } from './screens/DocumentScreen';
 import { ChecklistScreen } from './screens/ChecklistScreen';
 import { EditorScreen } from './screens/EditorScreen';
+import { AttachmentScreen } from './screens/AttachmentScreen';
 import { ActivityScreen } from './screens/ActivityScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
 import { DialogHost } from './dialogs/Dialogs';
 import { SearchPalette } from './dialogs/SearchPalette';
 import { PopupMenuLayer, ToastLayer } from './ui/overlays';
-import { Btn, IconWell } from './ui/primitives';
+import { Btn, Hover } from './ui/primitives';
+import loreIcon from './assets/lore-icon.png';
 
 export default function App() {
   return (
@@ -66,6 +68,7 @@ function Main() {
       return <FolderScreen key={route.path} path={route.path} />;
     case 'file': {
       const kind = fileKind(route.path);
+      if (kind === 'attachment') return <AttachmentScreen key={route.path} path={route.path} />;
       if (route.edit && kind !== 'index') return <EditorScreen key={`e:${route.path}`} path={route.path} line={route.line} />;
       if (kind === 'checklist') return <ChecklistScreen key={route.path} path={route.path} />;
       return <DocumentScreen key={route.path} path={route.path} />;
@@ -83,7 +86,7 @@ function Login() {
   return (
     <View style={[{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 }, web({ backgroundImage: c.bgGradient })]}>
       <View style={{ maxWidth: 520, alignItems: 'center', gap: 16 }}>
-        <IconWell icon="auto_stories" tint="purple" size={56} />
+        <img src={loreIcon} alt="Lore LLM" width={72} height={72} style={{ filter: 'drop-shadow(0 14px 40px rgba(143,92,255,.25))' }} />
         <Text style={[t(700, 34, 1.1, { letterSpacing: -1.2, textAlign: 'center' }), web({ backgroundImage: c.gradient, WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' })]}>
           Lore LLM Desktop
         </Text>
@@ -97,11 +100,33 @@ function Login() {
             <Btn label="Annulla" onPress={app.cancelSignIn} />
           </View>
         ) : (
-          <Btn variant="primary" icon="login" label="Accedi con Google" onPress={app.signIn} style={{ marginTop: 8 }} />
+          <View style={{ gap: 10, marginTop: 8, width: 280 }}>
+            <AppleButton onPress={() => app.signIn('apple')} />
+            <Btn icon="login" label="Accedi con Google" onPress={() => app.signIn('google')} height={44} style={{ width: '100%' }} />
+          </View>
         )}
         <Text style={t(400, 12, 1, { color: c.ink3, marginTop: 4 })}>Server: {app.server}</Text>
       </View>
     </View>
+  );
+}
+
+// Sign in with Apple, drawn per Apple's guidelines: white button, black logo and label, same size as the others.
+function AppleButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Hover
+      onPress={onPress}
+      accessibilityLabel="Accedi con Apple"
+      style={({ hovered }) => ({ height: 44, borderRadius: radius.md, backgroundColor: hovered ? '#ececec' : '#ffffff', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 })}
+    >
+      <svg width={17} height={17} viewBox="0 0 24 24" aria-hidden="true" style={{ marginTop: -2 }}>
+        <path
+          fill="#000"
+          d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"
+        />
+      </svg>
+      <Text style={t(600, 14.5, 1, { color: '#000' })}>Accedi con Apple</Text>
+    </Hover>
   );
 }
 

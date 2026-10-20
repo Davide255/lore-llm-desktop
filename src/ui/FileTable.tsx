@@ -2,7 +2,7 @@ import React from 'react';
 import { Text, View } from 'react-native';
 import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
-import { openItemMenu, openRoute } from '../state/actions';
+import { editNode, openItemMenu, openRoute } from '../state/actions';
 import { countFiles, fileKind, formatSize, projectOf, relTime } from '../kb/paths';
 import type { AgentRef, TreeNode } from '../kb/types';
 import { eventPoint, Hover, Icon } from './primitives';
@@ -18,6 +18,7 @@ export function FileIcon({ node, size = 18 }: { node: TreeNode; size?: number })
   const k = fileKind(node.path);
   if (k === 'index') return <Icon name="auto_awesome" size={size - 1} color={c.info} />;
   if (k === 'checklist') return <Icon name="checklist" size={size - 1} color={c.purpleTint} />;
+  if (k === 'attachment') return <Icon name={/\.pdf$/i.test(node.path) ? 'picture_as_pdf' : 'image'} size={size - 1} color={c.blueTint} />;
   return <Icon name="description" size={size - 1} color={c.ink3} />;
 }
 
@@ -45,7 +46,7 @@ export function FileTable({ rows, columns, header = true, empty }: { rows: TreeN
           <Hover
             key={n.path}
             onPress={() => app.navigate(openRoute(n))}
-            onDoubleClick={() => n.kind === 'file' && fileKind(n.path) !== 'index' && app.navigate(openRoute(n, true))}
+            onDoubleClick={() => n.kind === 'file' && editNode(app, n)}
             onContextMenu={(e: any) => {
               e.preventDefault();
               const pt = eventPoint(e);

@@ -1,10 +1,10 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { c, font, radius, t, web } from '../theme';
 import { useApp, type SettingsSection } from '../state/app';
 import { allFiles, projects, relTime } from '../kb/paths';
 import { lore } from '../kb/bridge';
-import type { Agent, AgentKind, NewAgent, Permission } from '../kb/types';
+import type { Agent, AgentKind, NewAgent, Permission, VaultStatus } from '../kb/types';
 import { AGENT_KIND_LIST, AGENT_KINDS } from '../kb/agents';
 import { AgentAvatar } from '../ui/identity';
 import { Avatar, Btn, Card, Field, FieldLabel, Hover, Icon, IconWell, Kbd, Segmented, Toggle } from '../ui/primitives';
@@ -14,6 +14,7 @@ const SECTIONS: { key: SettingsSection; icon: string; label: string }[] = [
   { key: 'account', icon: 'account_circle', label: 'Account' },
   { key: 'general', icon: 'tune', label: 'Generale' },
   { key: 'editor', icon: 'edit_note', label: 'Editor' },
+  { key: 'obsidian', icon: 'hub', label: 'Obsidian' },
   { key: 'agents', icon: 'smart_toy', label: 'Agenti' },
   { key: 'shortcuts', icon: 'keyboard', label: 'Scorciatoie' },
 ];
@@ -39,7 +40,7 @@ export function SettingsScreen({ section = 'general' }: { section?: SettingsSect
         })}
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 34, paddingHorizontal: 44, gap: 22, maxWidth: 1000 }}>
-        {section === 'account' ? <Account /> : section === 'general' ? <General /> : section === 'editor' ? <EditorPrefs /> : section === 'agents' ? <Agents /> : <Shortcuts />}
+        {section === 'account' ? <Account /> : section === 'general' ? <General /> : section === 'editor' ? <EditorPrefs /> : section === 'obsidian' ? <ObsidianPrefs /> : section === 'agents' ? <Agents /> : <Shortcuts />}
       </ScrollView>
     </View>
   );
@@ -71,7 +72,7 @@ function Account() {
               {user.name}
             </Text>
             <Text numberOfLines={1} style={t(400, 12.5, 1.4, { color: c.ink3, marginTop: 3 })}>
-              {user.email ?? 'Account Google'}
+              {user.email ?? (user.provider === 'apple' ? 'Account Apple' : 'Account Google')}
             </Text>
           </View>
           <Btn icon="logout" label="Esci" onPress={app.signOut} />
@@ -158,7 +159,196 @@ function EditorPrefs() {
         </View>
         <Toggle value={app.prefs.syncScroll ?? true} onChange={(v) => app.setPrefs({ syncScroll: v })} />
       </Card>
+      <DefaultEditorCard />
     </>
+  );
+}
+
+function DefaultEditorCard() {
+  const app = useApp();
+  return (
+    <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+      <View style={{ flex: 1 }}>
+        <Text style={t(500, 14, 1.3)}>Editor predefinito</Text>
+        <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
+          {app.obsidianReady
+            ? 'Modifica, il tasto E e il doppio clic aprono le note qui o in Obsidian. Le checklist restano in Lore.'
+            : 'Per usare Obsidian attiva prima la copia locale nella sezione Obsidian.'}
+        </Text>
+      </View>
+      <Segmented
+        width={220}
+        value={app.obsidianReady ? (app.prefs.defaultEditor ?? 'lore') : 'lore'}
+        onChange={(v) => (app.obsidianReady || v === 'lore' ? app.setPrefs({ defaultEditor: v }) : app.navigate({ name: 'settings', section: 'obsidian' }))}
+        options={[
+          { value: 'lore', label: 'Lore' },
+          { value: 'obsidian', label: 'Obsidian' },
+        ]}
+      />
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Obsidian: local vault kept in sync with the cloud
+// ---------------------------------------------------------------------------
+function ObsidianPrefs() {
+  const app = useApp();
+  const v = app.vault;
+  const o = app.obsidian;
+  const on = !!v?.enabled;
+  const { refreshVault } = app;
+
+  // Registration happens in Obsidian: keep looking while this page is open.
+  useEffect(() => {
+    refreshVault().catch(() => {});
+    const id = setInterval(() => refreshVault().catch(() => {}), 4000);
+    return () => clearInterval(id);
+  }, [refreshVault]);
+
+  return (
+    <>
+      <Header
+        title="Obsidian"
+        body="Modifica la knowledge base con Obsidian. Lore ne tiene una copia in una cartella del computer e la sincronizza con il cloud nei due sensi: le modifiche degli agenti arrivano in Obsidian, le tue arrivano agli agenti."
+      />
+      <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+        <IconWell icon="hub" tint="purple" />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={t(500, 14, 1.3)}>Obsidian</Text>
+          <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
+            {!o.installed ? 'Non trovato su questo computer.' : o.registered ? 'Installato · la copia locale è aperta come vault.' : on ? 'Installato · apri la cartella della copia locale come vault.' : 'Installato.'}
+          </Text>
+        </View>
+        {o.installed ? (
+          on ? <Btn icon="open_in_new" label="Apri in Obsidian" onPress={() => app.openInObsidian()} /> : null
+        ) : (
+          <Btn icon="download" label="Scarica Obsidian" onPress={() => window.open('https://obsidian.md/download', '_blank')} />
+        )}
+      </Card>
+
+      <Card style={{ gap: 12 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={t(500, 14, 1.3)}>Copia locale della knowledge base</Text>
+            <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
+              Una cartella normale con un file .md per nota. Obsidian (o qualsiasi editor) lavora lì; Lore carica e scarica le modifiche.
+            </Text>
+          </View>
+          <Toggle value={on} onChange={(next) => app.openDialog(next ? { kind: 'vaultSetup' } : { kind: 'vaultDisable' })} />
+        </View>
+        {on && v?.root ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: radius.md, backgroundColor: c.fill04 }}>
+            <Icon name="folder" filled size={17} color={c.blueTint} />
+            <Text numberOfLines={1} style={{ flex: 1, fontFamily: font.mono, fontSize: 12.5, color: c.ink2 }}>
+              {v.root}
+            </Text>
+            <Btn height={30} icon="content_copy" label="Copia percorso" onPress={() => lore.copy(v.root!)} />
+            <Btn height={30} icon="folder_open" label="Mostra cartella" onPress={() => lore.vaultReveal()} />
+          </View>
+        ) : null}
+      </Card>
+
+      {on && v ? <VaultStatusCard v={v} /> : null}
+
+      {on && v ? (
+        <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={t(500, 14, 1.3)}>Formato dei link</Text>
+            <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
+              Come Obsidian scrive i nuovi link. I link Markdown li leggono anche agenti e app mobile; Lore capisce entrambi. Riavvia Obsidian per applicare.
+            </Text>
+          </View>
+          <Segmented
+            width={240}
+            value={v.linkFormat}
+            onChange={(f) => lore.vaultSetLinkFormat(f).then(() => refreshVault())}
+            options={[
+              { value: 'markdown', label: 'Markdown' },
+              { value: 'wikilink', label: '[[Wikilink]]' },
+            ]}
+          />
+        </Card>
+      ) : null}
+
+      <DefaultEditorCard />
+    </>
+  );
+}
+
+const STATE_LABEL: Record<VaultStatus['state'], { icon: string; color: string; label: string }> = {
+  off: { icon: 'cloud_off', color: c.ink3, label: 'Non attiva' },
+  idle: { icon: 'cloud_done', color: c.success, label: 'Sincronizzata' },
+  syncing: { icon: 'sync', color: c.purpleTint, label: 'Sincronizzazione in corso…' },
+  offline: { icon: 'cloud_off', color: c.warning, label: 'Offline' },
+  'paused:auth': { icon: 'lock', color: c.warning, label: 'In pausa: accesso scaduto' },
+  'paused:confirm': { icon: 'help', color: c.warning, label: 'In attesa di conferma' },
+  error: { icon: 'error', color: c.danger, label: 'Errore' },
+};
+
+function VaultStatusCard({ v }: { v: VaultStatus }) {
+  const app = useApp();
+  const s = STATE_LABEL[v.state];
+  const [syncing, setSyncing] = useState(false);
+  return (
+    <Card style={{ gap: 12 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <Icon name={s.icon} size={20} color={s.color} />
+        <View style={{ flex: 1 }}>
+          <Text style={t(500, 14, 1.3)}>{s.label}</Text>
+          <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
+            {v.error ?? (v.lastSyncAt ? `Ultima sincronizzazione ${relTime(v.lastSyncAt)}` : 'Le modifiche salvate in Obsidian arrivano qui in pochi secondi.')}
+          </Text>
+        </View>
+        {v.state === 'paused:confirm' && v.confirm ? (
+          <Btn label="Rivedi" variant="tint" onPress={() => app.openDialog({ kind: 'vaultConfirm', count: v.confirm!.count, paths: v.confirm!.paths })} />
+        ) : null}
+        <Btn
+          icon="sync"
+          label="Sincronizza ora"
+          disabled={syncing}
+          onPress={async () => {
+            setSyncing(true);
+            try {
+              await lore.vaultSyncNow();
+              await app.refreshVault();
+            } finally {
+              setSyncing(false);
+            }
+          }}
+        />
+      </View>
+      {v.conflicts.length ? (
+        <View style={{ gap: 6 }}>
+          <Text style={t(600, 10.5, 1, { letterSpacing: 0.84, textTransform: 'uppercase', color: c.ink3 })}>Conflitti recenti</Text>
+          {v.conflicts.slice(0, 5).map((cf) => (
+            <Hover key={cf.copy} onPress={() => app.navigate({ name: 'file', path: cf.copy })} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Icon name="sync_problem" size={15} color={c.warning} />
+              <Text numberOfLines={1} style={{ flex: 1, fontFamily: font.mono, fontSize: 12, color: c.purpleTint }}>
+                {cf.copy}
+              </Text>
+              <Text style={t(400, 11.5, 1, { color: c.ink3 })}>{relTime(cf.at)}</Text>
+            </Hover>
+          ))}
+        </View>
+      ) : null}
+      {v.unsynced.length ? (
+        <View style={{ gap: 6 }}>
+          <Text style={t(600, 10.5, 1, { letterSpacing: 0.84, textTransform: 'uppercase', color: c.ink3 })}>Non sincronizzati ({v.unsynced.length})</Text>
+          {v.unsynced.slice(0, 8).map((u) => (
+            <View key={u.path} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Icon name="block" size={15} color={c.ink3} />
+              <Text numberOfLines={1} style={{ flexShrink: 1, fontFamily: font.mono, fontSize: 12, color: c.ink2 }}>
+                {u.path}
+              </Text>
+              <Text numberOfLines={1} style={[t(400, 11.5, 1.3, { color: c.ink3 }), { flex: 1 }]}>
+                — {u.reason}
+              </Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </Card>
   );
 }
 

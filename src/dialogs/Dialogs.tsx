@@ -5,6 +5,7 @@ import { useApp } from '../state/app';
 import { allFolders, basename, countFiles, dirname, fileKind, findNode, join, templateContent, validateName, withMd, type Template } from '../kb/paths';
 import { Btn, Field, FieldLabel, Hint, Hover, Icon, IconWell, InfoStrip } from '../ui/primitives';
 import { DialogFooter, DialogFrame, DialogTitle, anchorBelow } from '../ui/overlays';
+import { VaultConfirmDialog, VaultDisableDialog, VaultSetupDialog } from './VaultDialogs';
 
 export function DialogHost() {
   const { dialog, openDialog } = useApp();
@@ -25,6 +26,12 @@ export function DialogHost() {
       return <DeleteDialog path={dialog.path} onClose={close} />;
     case 'unsaved':
       return <UnsavedDialog next={dialog.next} onClose={close} />;
+    case 'vaultSetup':
+      return <VaultSetupDialog onClose={close} />;
+    case 'vaultConfirm':
+      return <VaultConfirmDialog count={dialog.count} paths={dialog.paths} onClose={close} />;
+    case 'vaultDisable':
+      return <VaultDisableDialog onClose={close} />;
   }
 }
 

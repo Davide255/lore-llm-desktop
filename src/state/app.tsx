@@ -1,16 +1,16 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { lore } from '../kb/bridge';
-import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, NewAgent, Permission, Prefs, TreeNode } from '../kb/types';
+import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, NewAgent, ObsidianStatus, Permission, Prefs, SignInProvider, TreeNode, VaultStatus } from '../kb/types';
 import { basename, dirname, fileKind, findNode } from '../kb/paths';
 
 export type Route =
   | { name: 'projects' }
   | { name: 'folder'; path: string }
-  | { name: 'file'; path: string; edit?: boolean; line?: number }
+  | { name: 'file'; path: string; edit?: boolean; line?: number; heading?: string }
   | { name: 'activity'; id?: string }
   | { name: 'settings'; section?: SettingsSection };
 
-export type SettingsSection = 'account' | 'general' | 'editor' | 'agents' | 'shortcuts';
+export type SettingsSection = 'account' | 'general' | 'editor' | 'obsidian' | 'agents' | 'shortcuts';
 
 export type Dialog =
   | { kind: 'newFile'; dir: string }
@@ -19,7 +19,10 @@ export type Dialog =
   | { kind: 'rename'; path: string }
   | { kind: 'move'; path: string }
   | { kind: 'delete'; path: string }
-  | { kind: 'unsaved'; next: () => void };
+  | { kind: 'unsaved'; next: () => void }
+  | { kind: 'vaultSetup' }
+  | { kind: 'vaultConfirm'; count: number; paths: string[] }
+  | { kind: 'vaultDisable' };
 
 export type MenuItem =
   | 'sep'
@@ -89,11 +92,22 @@ interface AppCtx {
   loadAudit: () => Promise<void>;
   user: AuthUser | null;
   signingIn: boolean;
-  signIn: () => Promise<void>;
+  signIn: (provider?: SignInProvider) => Promise<void>;
   cancelSignIn: () => void;
   signOut: () => Promise<void>;
   sync: Sync;
   setSync: (s: Sync) => void;
+  /** The local vault for Obsidian (null until known). */
+  vault: VaultStatus | null;
+  obsidian: ObsidianStatus;
+  refreshVault: () => Promise<void>;
+  /** The vault is on and Obsidian can open its notes. */
+  obsidianReady: boolean;
+  openInObsidian: (path?: string) => Promise<void>;
+  /** "Modifica": the Lore editor, or Obsidian when it's the default editor. */
+  editFile: (path: string) => void;
+  /** Who made the latest external change (agent, Obsidian, another device). */
+  changedSource: ChangedEvent['source'];
   /** Bumped whenever files change on disk; screens re-read on change. */
   revision: number;
   changedPaths: string[];
@@ -142,6 +156,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [sync, setSync] = useState<Sync>('synced');
   const [revision, setRevision] = useState(0);
   const [changedPaths, setChangedPaths] = useState<string[]>([]);
+  const [changedSource, setChangedSource] = useState<ChangedEvent['source']>();
+  const [vault, setVault] = useState<VaultStatus | null>(null);
+  const [obsidian, setObsidian] = useState<ObsidianStatus>({ installed: false, registered: false });
   const editorRef = useRef<EditorHandle | null>(null);
   const lastUndo = useRef<{ run: () => void; until: number } | null>(null);
   const treeRef = useRef(tree);
@@ -174,9 +191,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Disk changes from agents (or any other program)
   useEffect(() => {
     let t: ReturnType<typeof setTimeout>;
-    const offChanged = lore.onChanged(async ({ paths, external }) => {
+    const offChanged = lore.onChanged(async ({ paths, external, source }) => {
       await refresh();
       setChangedPaths(paths);
+      if (external) setChangedSource(source ?? 'agent');
       setRevision((v) => v + 1);
       if (external) {
         setSync('external');
@@ -188,10 +206,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const offActivity = lore.onActivity((ev) => setActivity((a) => [ev, ...a.filter((x) => x.id !== ev.id)].slice(0, 300)));
     // Sign-in, sign-out, or a session that expired for good.
     const offAuth = lore.onAuthChanged(setUser);
+    const offVault = lore.onVaultStatus(setVault);
     return () => {
       offChanged();
       offActivity();
       offAuth();
+      offVault();
       clearTimeout(t);
     };
   }, [refresh, loadAudit]);
@@ -289,6 +309,76 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return n;
     });
   }, []);
+
+  // ----------------------------------------------------------- local vault
+  const refreshVault = useCallback(async () => {
+    const [v, o] = await Promise.all([lore.vaultStatus(), lore.obsidianStatus()]);
+    setVault(v);
+    setObsidian(o);
+  }, []);
+
+  useEffect(() => {
+    if (userId) refreshVault().catch(() => {});
+  }, [userId, refreshVault]);
+
+  useEffect(() => {
+    const offConflict = lore.onVaultConflict(({ path, copy }) =>
+      toast({
+        icon: 'sync_problem',
+        mono: basename(path),
+        text: 'modificato anche nel cloud: la loro versione è in una copia',
+        action: { label: 'Apri copia', run: () => navigate({ name: 'file', path: copy }) },
+        ttl: 10_000,
+      }),
+    );
+    const offConfirm = lore.onVaultConfirm(({ count, paths }) => openDialog({ kind: 'vaultConfirm', count, paths }));
+    const offNotice = lore.onVaultNotice(({ message }) => toast({ icon: 'info', text: message, ttl: 6000 }));
+    const offNavigate = lore.onNavigate(({ path, heading }) => navigate({ name: 'file', path, ...(heading ? { heading } : {}) }));
+    return () => {
+      offConflict();
+      offConfirm();
+      offNotice();
+      offNavigate();
+    };
+  }, [toast, navigate]);
+
+  // A lore:// link that started the app is opened once the knowledge base is there.
+  useEffect(() => {
+    if (!loaded || !userId) return;
+    lore.takePendingLink().then((link) => {
+      if (link && findNode(treeRef.current, link.path)) navigate({ name: 'file', path: link.path, ...(link.heading ? { heading: link.heading } : {}) });
+    });
+  }, [loaded, userId, navigate]);
+
+  const obsidianReady = !!vault?.enabled && vault.state !== 'off' && obsidian.installed;
+
+  const openInObsidian = useCallback(
+    async (path?: string) => {
+      try {
+        if (!obsidian.registered) {
+          // Obsidian has no link that adds a vault: the setup explains the one manual step.
+          await refreshVault();
+          const o = await lore.obsidianStatus();
+          if (!o.registered) {
+            openDialog({ kind: 'vaultSetup' });
+            return;
+          }
+        }
+        await lore.openInObsidian(path);
+      } catch (e) {
+        fail(e);
+      }
+    },
+    [obsidian.registered, refreshVault, fail],
+  );
+
+  const editFile = useCallback(
+    (path: string) => {
+      if (prefs.defaultEditor === 'obsidian' && obsidianReady && fileKind(path) === 'doc') openInObsidian(path);
+      else navigate({ name: 'file', path, edit: true });
+    },
+    [prefs.defaultEditor, obsidianReady, openInObsidian, navigate],
+  );
 
   // Window close with unsaved edits
   useEffect(
@@ -456,10 +546,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     [fail, toast],
   );
 
-  const signIn = useCallback(async () => {
+  const signIn = useCallback(async (provider: SignInProvider = 'google') => {
     setSigningIn(true);
     try {
-      const u = await lore.signIn();
+      const u = await lore.signIn(provider);
       setUser(u);
       if (u) toast({ icon: 'check_circle', text: `Accesso eseguito come ${u.email ?? u.name}` });
     } catch (e) {
@@ -529,6 +619,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     signOut,
     sync,
     setSync,
+    vault,
+    obsidian,
+    refreshVault,
+    obsidianReady,
+    openInObsidian,
+    editFile,
+    changedSource,
     revision,
     changedPaths,
     refresh,

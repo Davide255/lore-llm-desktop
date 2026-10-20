@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Text, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import { lore } from '../kb/bridge';
 import type { FileContent } from '../kb/types';
-import { basename, dirname, findNode, join } from '../kb/paths';
+import { basename, dirname, filePaths, findNode, join, withMd } from '../kb/paths';
+import { isAttachment, parseWikiLink, resolveHref, resolveWikiTarget } from '../kb/links';
 import { useApp } from '../state/app';
 import { c, font, t } from '../theme';
 import { Btn, Icon } from '../ui/primitives';
@@ -45,27 +46,24 @@ export function useFile(path: string) {
   return { file, setFile, error, reload };
 }
 
-/** Resolves links inside a document to KB paths. */
-export function useLinkHandler(fromPath: string) {
+/** What a rendered note needs to resolve and follow its links. */
+export interface LinkProps {
+  onLink: (href: string) => void;
+  resolveMention: (name: string) => string | null;
+  resolveWiki: (inner: string) => string | null;
+  resolveAsset: (href: string) => string | null;
+}
+
+/**
+ * Resolves links inside a document to KB paths: markdown links (relative or
+ * KB-root relative), Obsidian [[wikilinks]] and embedded attachments.
+ */
+export function useLinkHandler(fromPath: string): LinkProps {
   const app = useApp();
-  const resolve = useCallback(
-    (href: string): string | null => {
-      const clean = decodeURIComponent(href.replace(/^<|>$/g, '').split('#')[0]);
-      if (!clean || /^[a-z]+:/i.test(clean)) return null;
-      const segs = (clean.startsWith('/') ? clean.slice(1) : join(dirname(fromPath), clean)).split('/');
-      const out: string[] = [];
-      for (const s of segs) {
-        if (s === '..') out.pop();
-        else if (s && s !== '.') out.push(s);
-      }
-      const p = out.join('/');
-      if (findNode(app.tree, p)) return p;
-      // Fallback: KB-root relative (agents often write paths that way).
-      if (findNode(app.tree, clean)) return clean;
-      return null;
-    },
-    [app.tree, fromPath],
-  );
+  const paths = useMemo(() => filePaths(app.tree), [app.tree]);
+  const exists = useCallback((p: string) => !!findNode(app.tree, p), [app.tree]);
+
+  const resolve = useCallback((href: string): string | null => resolveHref(href, fromPath, exists)?.path ?? null, [fromPath, exists]);
 
   const resolveMention = useCallback(
     (name: string) => {
@@ -79,24 +77,86 @@ export function useLinkHandler(fromPath: string) {
     [resolve, app.tree, fromPath],
   );
 
+  const resolveWiki = useCallback(
+    (inner: string) => {
+      const w = parseWikiLink(inner);
+      return w.target ? resolveWikiTarget(w.target, fromPath, paths) : fromPath;
+    },
+    [fromPath, paths],
+  );
+
+  // `![](img/a.png)` or a bare `a.png`, as Obsidian writes them.
+  const resolveAsset = useCallback(
+    (href: string) => {
+      const r = resolveHref(href, fromPath, exists);
+      if (r && isAttachment(r.path)) return r.path;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
+      const w = resolveWikiTarget(decodeSafe(href), fromPath, paths);
+      return w && isAttachment(w) ? w : null;
+    },
+    [fromPath, exists, paths],
+  );
+
+  const go = useCallback(
+    (p: string, heading?: string) => {
+      const node = findNode(app.tree, p);
+      if (!node) return;
+      app.navigate(node.kind === 'folder' ? { name: 'folder', path: p } : { name: 'file', path: p, ...(heading ? { heading } : {}) });
+    },
+    [app],
+  );
+
   const onLink = useCallback(
     (href: string) => {
       if (/^https?:|^mailto:/i.test(href)) {
         window.open(href, '_blank');
         return;
       }
-      const p = findNode(app.tree, href) ? href : resolve(href);
-      if (!p) {
+      if (href.startsWith('[[') && href.endsWith(']]')) {
+        const w = parseWikiLink(href.slice(2, -2));
+        if (!w.target) {
+          if (w.heading) go(fromPath, w.heading);
+          return;
+        }
+        const p = resolveWikiTarget(w.target, fromPath, paths);
+        if (p) {
+          go(p, w.heading);
+          return;
+        }
+        // Obsidian creates a missing note on click; here it's offered.
+        const target = w.target.includes('/') ? withMd(w.target) : join(dirname(fromPath), withMd(w.target));
+        app.toast({
+          icon: 'link_off',
+          mono: w.target,
+          text: 'non esiste ancora',
+          action: { label: 'Crea nota', run: () => app.ops.createFile(target, `# ${basename(w.target)}\n\n`) },
+          ttl: 6000,
+        });
+        return;
+      }
+      if (findNode(app.tree, href)) {
+        go(href);
+        return;
+      }
+      const r = resolveHref(href, fromPath, exists);
+      if (!r) {
         app.toast({ icon: 'link_off', mono: href, text: 'non trovato nella knowledge base' });
         return;
       }
-      const node = findNode(app.tree, p)!;
-      app.navigate(node.kind === 'folder' ? { name: 'folder', path: p } : { name: 'file', path: p });
+      go(r.path, r.heading);
     },
-    [app, resolve],
+    [app, go, fromPath, paths, exists],
   );
 
-  return { onLink, resolveMention };
+  return { onLink, resolveMention, resolveWiki, resolveAsset };
+}
+
+function decodeSafe(s: string) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
 }
 
 function findByName(tree: ReturnType<typeof useApp>['tree'], name: string, project: string): string | null {

@@ -6,14 +6,14 @@ import { addItem, addSection, deleteItem, parseChecklist, setItemText, toggleIte
 import { relTime } from '../kb/paths';
 import { Btn, Hover, Icon, Progress } from '../ui/primitives';
 import { InlineMarkdown } from '../ui/Markdown';
-import { EmptyState, FileBar, Rail, RailHeading, useFile, useLinkHandler, useWidth } from './common';
+import { EmptyState, FileBar, Rail, RailHeading, useFile, useLinkHandler, useWidth, type LinkProps } from './common';
 
 type Draft = { kind: 'add'; section: number; parent?: ChecklistItem } | { kind: 'edit'; item: ChecklistItem } | { kind: 'section' };
 
 export function ChecklistScreen({ path }: { path: string }) {
   const app = useApp();
   const { file, error } = useFile(path);
-  const { onLink, resolveMention } = useLinkHandler(path);
+  const links = useLinkHandler(path);
   const [content, setContent] = useState<string | null>(null);
   const latest = useRef<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -77,7 +77,7 @@ export function ChecklistScreen({ path }: { path: string }) {
               <View key={`${si}-${sec.line}`} style={{ marginBottom: 8 }}>
                 {sec.title != null ? (
                   <Text style={t(600, sec.level <= 2 ? 19 : 16, 1.3, { letterSpacing: -0.38, marginTop: si === 0 ? 0 : 28, marginBottom: 10 })}>
-                    <InlineMarkdown text={sec.title} onLink={onLink} resolveMention={resolveMention} />
+                    <InlineMarkdown text={sec.title} {...links} />
                   </Text>
                 ) : null}
                 <View style={{ gap: 4, marginHorizontal: -8 }}>
@@ -100,8 +100,7 @@ export function ChecklistScreen({ path }: { path: string }) {
                           onEdit={() => setDraft({ kind: 'edit', item })}
                           onAddChild={() => setDraft({ kind: 'add', section: si, parent: item })}
                           onDelete={() => commit(deleteItem(latest.current!, item), item.childCount ? `Voce e ${item.childCount} sotto-voci eliminate` : 'Voce eliminata')}
-                          onLink={onLink}
-                          resolveMention={resolveMention}
+                          links={links}
                         />
                       )}
                       {liveParent && liveParent.section === si && liveParent.endLine === item.line ? (
@@ -113,7 +112,7 @@ export function ChecklistScreen({ path }: { path: string }) {
                     <View style={{ paddingHorizontal: 8, gap: 4, marginTop: sec.items.length ? 6 : 0 }}>
                       {sec.notes.map((n) => (
                         <Text key={n.line} style={t(400, 13.5, 1.55, { color: c.ink3 })}>
-                          <InlineMarkdown text={n.text} onLink={onLink} resolveMention={resolveMention} />
+                          <InlineMarkdown text={n.text} {...links} />
                         </Text>
                       ))}
                     </View>
@@ -191,16 +190,14 @@ function ItemRow({
   onEdit,
   onAddChild,
   onDelete,
-  onLink,
-  resolveMention,
+  links,
 }: {
   item: ChecklistItem;
   onToggle: () => void;
   onEdit: () => void;
   onAddChild: () => void;
   onDelete: () => void;
-  onLink: (h: string) => void;
-  resolveMention: (n: string) => string | null;
+  links: LinkProps;
 }) {
   const top = item.depth === 0;
   return (
@@ -224,7 +221,7 @@ function ItemRow({
               item.checked && { textDecorationLine: 'line-through' },
             ]}
           >
-            <InlineMarkdown text={item.text || ' '} onLink={onLink} resolveMention={resolveMention} />
+            <InlineMarkdown text={item.text || ' '} {...links} />
           </Text>
           {hovered ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>

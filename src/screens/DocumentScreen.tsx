@@ -4,7 +4,8 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { openItemMenu } from '../state/actions';
 import { lore } from '../kb/bridge';
-import { basename, fileKind, formatSize, longDate, relTime, wordCount } from '../kb/paths';
+import { basename, fileKind, filePaths, formatSize, longDate, relTime, wordCount } from '../kb/paths';
+import { backlinks as linksTo, sameHeading } from '../kb/links';
 import { AuthorAvatar, authorName } from '../ui/identity';
 import { Btn, Hover, Icon, IconBtn, InfoStrip, Kbd } from '../ui/primitives';
 import { Markdown, extractHeadings } from '../ui/Markdown';
@@ -14,7 +15,7 @@ import { EmptyState, FileBar, Rail, RailHeading, useFile, useLinkHandler, useWid
 export function DocumentScreen({ path }: { path: string }) {
   const app = useApp();
   const { file, error } = useFile(path);
-  const { onLink, resolveMention } = useLinkHandler(path);
+  const links = useLinkHandler(path);
   const readOnly = fileKind(path) === 'index';
   const { width, onLayout } = useWidth();
   const showRail = width > 980;
@@ -27,17 +28,33 @@ export function DocumentScreen({ path }: { path: string }) {
   const headings = useMemo(() => (file ? extractHeadings(file.content).filter((h) => h.depth <= 3) : []), [file]);
   const events = app.activity.filter((a) => a.path === path);
 
-  // "Citato da": files that link to or mention this one.
+  // "Citato da": notes that link here (markdown links or [[wikilinks]]), then plain mentions of the name.
   useEffect(() => {
     let live = true;
     const name = basename(path);
-    lore.search(name).then((rs) => {
-      if (live) setBacklinks(rs.filter((r) => r.path !== path && r.hits.length).map((r) => r.path).slice(0, 8));
+    Promise.all([lore.links(), lore.search(name)]).then(([index, rs]) => {
+      if (!live) return;
+      const linked = linksTo(path, index, filePaths(app.tree));
+      const mentions = rs.filter((r) => r.path !== path && r.hits.length && !linked.includes(r.path)).map((r) => r.path);
+      setBacklinks([...linked, ...mentions].slice(0, 8));
     });
     return () => {
       live = false;
     };
-  }, [path, app.revision]);
+  }, [path, app.revision, app.tree]);
+
+  // Arriving through a link to a heading (`[[Note#Heading]]`, `a.md#heading`, lore://…&heading=).
+  const targetHeading = app.route.name === 'file' && app.route.path === path ? app.route.heading : undefined;
+  useEffect(() => {
+    if (!targetHeading || !file) return;
+    const h = headings.find((x) => sameHeading(x.text, targetHeading));
+    if (!h) return;
+    const id = setTimeout(() => {
+      const y = headingY.current.get(h.line);
+      if (y != null) scrollRef.current?.scrollTo({ y: Math.max(0, y + (headingY.current.get(-1) ?? 0) + (readOnly ? 28 : 40) - 24), animated: true });
+    }, 80);
+    return () => clearTimeout(id);
+  }, [targetHeading, file, headings, readOnly]);
 
   useEffect(() => {
     headingY.current.clear();
@@ -75,6 +92,7 @@ export function DocumentScreen({ path }: { path: string }) {
   return (
     <View style={{ flex: 1 }} onLayout={onLayout}>
       <FileBar title={basename(path)} subtitle={subtitle}>
+        {app.obsidianReady ? <IconBtn icon="open_in_new" title="Apri in Obsidian" onPress={() => app.openInObsidian(path)} /> : null}
         <IconBtn icon="ios_share" title="Copia link" onPress={() => app.ops.copyLink(path)} />
         {readOnly ? (
           <Btn icon="lock" label="Sola lettura" textColor={c.ink3} disabled style={{ opacity: 1 }} />
@@ -89,7 +107,7 @@ export function DocumentScreen({ path }: { path: string }) {
                 }}
               />
             </View>
-            <Btn variant="tint" icon="edit" label="Modifica" kbd="E" onPress={() => app.navigate({ name: 'file', path, edit: true })} />
+            <Btn variant="tint" icon="edit" label={app.prefs.defaultEditor === 'obsidian' && app.obsidianReady ? 'Modifica in Obsidian' : 'Modifica'} kbd="E" onPress={() => app.editFile(path)} />
           </>
         )}
       </FileBar>
@@ -106,13 +124,12 @@ export function DocumentScreen({ path }: { path: string }) {
               <View onLayout={(e) => headingY.current.set(-1, e.nativeEvent.layout.y)}>
                 <Markdown
                   source={file.content}
-                  onLink={onLink}
-                  resolveMention={resolveMention}
+                  {...links}
                   onHeadingLayout={(line, y) => headingY.current.set(line, y)}
                 />
               </View>
             ) : (
-              <Hover onPress={() => !readOnly && app.navigate({ name: 'file', path, edit: true })} style={{ paddingVertical: 40, alignItems: 'center', gap: 8 }}>
+              <Hover onPress={() => !readOnly && app.editFile(path)} style={{ paddingVertical: 40, alignItems: 'center', gap: 8 }}>
                 <Icon name="draft" size={28} color={c.ink3} />
                 <Text style={t(400, 14, 1.4, { color: c.ink3 })}>File vuoto{readOnly ? '' : ' — premi E per scrivere'}</Text>
               </Hover>

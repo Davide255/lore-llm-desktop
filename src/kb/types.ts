@@ -11,6 +11,9 @@ export interface AgentRef {
 
 export interface FileNode {
   kind: 'file';
+  /** Images and PDFs stored next to notes (synced from Obsidian). Absent for notes. */
+  type?: 'attachment';
+  mime?: string;
   name: string;
   path: string;
   mtime: number;
@@ -67,13 +70,21 @@ export interface DiffHunk {
   lines: string[];
 }
 
+/** Where one of your own changes came from: Lore itself (absent), Obsidian via the local vault, or another device. */
+export type ChangeSource = 'obsidian' | 'device';
+
 export interface ActivityEvent {
   id: string;
   at: number;
   path: string;
-  kind: 'created' | 'modified' | 'deleted';
+  kind: 'created' | 'modified' | 'deleted' | 'conflict';
   by: Author;
   agent?: AgentRef;
+  source?: ChangeSource;
+  /** Extra explanation (automatic merge, re-created file, conflict copy). */
+  note?: string;
+  /** kind 'conflict': where the cloud version was saved. */
+  copy?: string;
   added: number;
   removed: number;
   hunks: DiffHunk[];
@@ -116,13 +127,65 @@ export interface Prefs {
   syncScroll?: boolean;
   editorView?: 'preview' | 'split' | 'source';
   sidebarCollapsed?: boolean;
+  /** Where "Modifica" opens notes. Obsidian needs the local vault. */
+  defaultEditor?: 'lore' | 'obsidian';
+  obsidianBannerDismissed?: boolean;
 }
 
-/** Signed-in Google account (via Cognito). Tokens stay in the main process. */
+export type LinkFormat = 'markdown' | 'wikilink';
+
+/** The local vault: a folder kept in sync with the cloud, edited with Obsidian. */
+export interface VaultStatus {
+  state: 'off' | 'idle' | 'syncing' | 'offline' | 'paused:auth' | 'paused:confirm' | 'error';
+  enabled: boolean;
+  root: string | null;
+  /** Null in the Mac App Store build: the folder must be picked. */
+  defaultRoot: string | null;
+  linkFormat: LinkFormat;
+  pending: number;
+  lastSyncAt: number | null;
+  unsynced: { path: string; reason: string }[];
+  conflicts: { path: string; copy: string; at: number }[];
+  error: string | null;
+  confirm: { count: number; paths: string[] } | null;
+}
+
+export interface VaultPreview {
+  ok: boolean;
+  root: string;
+  error?: string;
+  exists?: boolean;
+  empty?: boolean;
+  /** The folder was already this account's vault. */
+  resume?: boolean;
+  download?: number;
+  upload?: number;
+  merge?: number;
+  same?: number;
+  unsynced?: number;
+}
+
+export interface ObsidianStatus {
+  installed: boolean;
+  /** The vault folder is registered in Obsidian ("Apri cartella come vault"). */
+  registered: boolean;
+}
+
+export interface ChangedEvent {
+  paths: string[];
+  external: boolean;
+  /** Who made an external change. */
+  source?: 'agent' | 'device' | 'obsidian';
+}
+
+export type SignInProvider = 'google' | 'apple';
+
+/** Signed-in Google or Apple account (via Cognito). Tokens stay in the main process. */
 export interface AuthUser {
   id: string;
   name: string;
   email: string | null;
+  provider?: SignInProvider;
 }
 
 /** The bridge the Electron preload exposes. A react-native-windows/macos
@@ -138,6 +201,8 @@ export interface LoreBridge {
   remove(path: string): Promise<string>;
   undoDelete(token: string): Promise<boolean>;
   search(q: string): Promise<SearchResult[]>;
+  /** Raw link targets per note: `[[...]]` for wikilinks, the href for markdown links. */
+  links(): Promise<Record<string, string[]>>;
   activity(): Promise<ActivityEvent[]>;
   markActivitySeen(): Promise<number>;
   lastSeenActivity(): Promise<number>;
@@ -146,6 +211,24 @@ export interface LoreBridge {
   updateAgent(id: string, patch: Partial<Pick<Agent, 'name' | 'kind' | 'permission' | 'scope'>>): Promise<boolean>;
   deleteAgent(id: string): Promise<boolean>;
   audit(opts?: { limit?: number; before?: number }): Promise<{ items: AuditItem[]; nextBefore: number | null }>;
+  vaultStatus(): Promise<VaultStatus>;
+  vaultChooseRoot(): Promise<string | null>;
+  vaultPreview(root?: string): Promise<VaultPreview>;
+  vaultEnable(opts: { root?: string; linkFormat?: LinkFormat }): Promise<VaultStatus>;
+  vaultDisable(opts?: { deleteLocal?: boolean }): Promise<VaultStatus>;
+  vaultSyncNow(): Promise<VaultStatus>;
+  vaultConfirm(answer: 'delete' | 'restore'): Promise<VaultStatus>;
+  /** Shows a file (or the vault folder) in Finder/Explorer. */
+  vaultReveal(path?: string): Promise<boolean>;
+  vaultSetLinkFormat(format: LinkFormat): Promise<VaultStatus>;
+  obsidianStatus(): Promise<ObsidianStatus>;
+  /** Opens a note (or the vault) in Obsidian. */
+  openInObsidian(path?: string): Promise<boolean>;
+  launchObsidian(): Promise<void>;
+  /** Opens an attachment in the system viewer. */
+  openAttachment(path: string): Promise<string>;
+  /** A lore:// link that arrived before the window was ready. */
+  takePendingLink(): Promise<{ path: string; heading?: string } | null>;
   /** Host of the Lore server the app talks to. */
   server(): Promise<string>;
   prefs(): Promise<Prefs>;
@@ -154,11 +237,17 @@ export interface LoreBridge {
   platform(): Promise<string>;
   confirmClose(): Promise<void>;
   authUser(): Promise<AuthUser | null>;
-  signIn(): Promise<AuthUser | null>;
+  signIn(provider?: SignInProvider): Promise<AuthUser | null>;
   cancelSignIn(): Promise<void>;
   signOut(): Promise<void>;
   onAuthChanged(cb: (user: AuthUser | null) => void): () => void;
-  onChanged(cb: (ev: { paths: string[]; external: boolean }) => void): () => void;
+  onChanged(cb: (ev: ChangedEvent) => void): () => void;
   onActivity(cb: (ev: ActivityEvent) => void): () => void;
   onCloseRequested(cb: () => void): () => void;
+  onVaultStatus(cb: (s: VaultStatus) => void): () => void;
+  onVaultConflict(cb: (ev: { path: string; copy: string }) => void): () => void;
+  onVaultConfirm(cb: (ev: { count: number; paths: string[] }) => void): () => void;
+  onVaultNotice(cb: (ev: { message: string }) => void): () => void;
+  /** lore://open?path=… */
+  onNavigate(cb: (ev: { path: string; heading?: string }) => void): () => void;
 }

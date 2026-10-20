@@ -193,7 +193,7 @@ export function EditorScreen({ path, line: initialLine }: { path: string; line?:
     else if (top + LINE_H > srcY.current + vh - 10) srcScroll.current?.scrollTo({ y: top + LINE_H - vh + 40, animated: false });
   }, [caretLine, text]);
 
-  const { onLink, resolveMention } = useLinkHandler(path);
+  const links = useLinkHandler(path);
 
   if (fileKind(path) === 'index') {
     return <EmptyState icon="lock" title="index.md è in sola lettura" body="Viene compilato automaticamente dagli agenti: modifica i file sorgente e verrà rigenerato." action={{ label: 'Apri in lettura', onPress: close }} />;
@@ -226,6 +226,7 @@ export function EditorScreen({ path, line: initialLine }: { path: string; line?:
           ]}
         />
         <View style={{ width: 6 }} />
+        {app.obsidianReady ? <IconBtn icon="open_in_new" title={dirty ? 'Salva prima di aprire in Obsidian' : 'Apri in Obsidian'} disabled={dirty} onPress={() => app.openInObsidian(path)} /> : null}
         <Btn variant="plain" label={dirty ? 'Annulla' : 'Chiudi'} onPress={close} />
         <Btn variant="primary" label="Salva" kbd="⌘S" onPress={save} disabled={!dirty} />
       </View>
@@ -233,7 +234,13 @@ export function EditorScreen({ path, line: initialLine }: { path: string; line?:
       {conflict != null ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 20, backgroundColor: c.warning14, borderBottomWidth: 1, borderColor: c.hair }}>
           <Icon name="sync_problem" size={18} color={c.warning} />
-          <Text style={[t(400, 13, 1.4, { color: c.ink }), { flex: 1 }]}>Un agente ha modificato questo file mentre lo stavi modificando.</Text>
+          <Text style={[t(400, 13, 1.4, { color: c.ink }), { flex: 1 }]}>
+            {app.changedSource === 'obsidian'
+              ? 'Il file è stato modificato in Obsidian mentre lo stavi modificando qui.'
+              : app.changedSource === 'device'
+                ? 'Il file è stato modificato da un altro dispositivo mentre lo stavi modificando.'
+                : 'Un agente ha modificato questo file mentre lo stavi modificando.'}
+          </Text>
           <Btn
             height={30}
             label="Carica la loro versione"
@@ -331,7 +338,7 @@ export function EditorScreen({ path, line: initialLine }: { path: string; line?:
           >
             <View style={view === 'preview' ? { width: '100%', maxWidth: 680, alignSelf: 'center', paddingVertical: 40 } : null}>
               {text.trim() ? (
-                <Markdown source={text} compact={view === 'split'} activeLine={view === 'split' ? caretLine : undefined} onLink={onLink} resolveMention={resolveMention} />
+                <Markdown source={text} compact={view === 'split'} activeLine={view === 'split' ? caretLine : undefined} {...links} />
               ) : (
                 <Text style={t(400, 14, 1.5, { color: c.ink3 })}>L’anteprima apparirà qui.</Text>
               )}

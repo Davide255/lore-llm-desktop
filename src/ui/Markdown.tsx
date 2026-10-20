@@ -1,8 +1,36 @@
-import React, { memo, useMemo } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import { Text, View, type TextStyle } from 'react-native';
-import { Lexer, type Token, type Tokens } from 'marked';
+import { Lexer, Marked, type Token, type Tokens } from 'marked';
 import { c, font, radius, t, web } from '../theme';
+import { assetUrl, isImage, parseWikiLink, wikiLabel } from '../kb/links';
 import { Icon } from './primitives';
+
+/** `[[Note#Heading|alias]]` and `![[image.png|300]]`, as Obsidian writes them. */
+interface WikiToken {
+  type: 'wikilink';
+  raw: string;
+  embed: boolean;
+  inner: string;
+}
+
+// One lexer configuration for blocks and inline snippets alike.
+const LEX = new Marked({ gfm: true }).use({
+  extensions: [
+    {
+      name: 'wikilink',
+      level: 'inline',
+      start(src: string) {
+        const i = src.indexOf('[[');
+        if (i === -1) return undefined;
+        return i > 0 && src[i - 1] === '!' ? i - 1 : i;
+      },
+      tokenizer(src: string) {
+        const m = /^(!?)\[\[([^[\]\n]+)\]\]/.exec(src);
+        return m ? ({ type: 'wikilink', raw: m[0], embed: m[1] === '!', inner: m[2] } as WikiToken) : undefined;
+      },
+    },
+  ],
+}).defaults;
 
 export interface Heading {
   depth: number;
@@ -24,7 +52,7 @@ const countNl = (s: string) => {
 
 /** Top-level blocks annotated with their source line range. */
 export function lexBlocks(src: string): Block[] {
-  const tokens = Lexer.lex(src, { gfm: true });
+  const tokens = Lexer.lex(src, LEX);
   const out: Block[] = [];
   let line = 0;
   for (const tok of tokens) {
@@ -57,6 +85,10 @@ export interface MarkdownProps {
   onLink?: (href: string) => void;
   /** Turns plain `name.md` mentions into links when they resolve. */
   resolveMention?: (name: string) => string | null;
+  /** Target of a `[[wikilink]]` (its inside), or null when it doesn't exist yet. */
+  resolveWiki?: (inner: string) => string | null;
+  /** KB path of an attachment referenced by an image link. */
+  resolveAsset?: (href: string) => string | null;
   onToggleTask?: (line: number) => void;
   onHeadingLayout?: (line: number, y: number) => void;
   onBlockLayout?: (line: number, y: number) => void;
@@ -258,8 +290,23 @@ function TableView({ table, ...p }: { table: Tokens.Table } & MarkdownProps) {
 
 /** A single line of inline markdown (checklist items, snippets). */
 export function InlineMarkdown({ text, ...p }: { text: string } & Partial<MarkdownProps>) {
-  const tokens = useMemo(() => Lexer.lexInline(text, { gfm: true }), [text]);
+  const tokens = useMemo(() => Lexer.lexInline(text, LEX), [text]);
   return <Inline tokens={tokens} source={text} {...p} />;
+}
+
+/** An image attachment, served by the main process (from the vault or the cloud). */
+function AssetImage({ rel, alt, width }: { rel: string; alt?: string; width?: number }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <Text {...({ dataSet: { asset: rel } } as object)} style={{ color: c.ink3 }}>🖼 {alt || rel}</Text>;
+  return (
+    <img
+      data-asset={rel}
+      src={assetUrl(rel)}
+      alt={alt ?? ''}
+      onError={() => setFailed(true)}
+      style={{ display: 'block', maxWidth: '100%', width: width ? `${width}px` : undefined, height: 'auto', borderRadius: radius.md, margin: '6px 0' }}
+    />
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -315,9 +362,33 @@ function InlineToken({ tok, ...p }: { tok: Token } & MarkdownProps): React.React
     }
     case 'image': {
       const im = tok as Tokens.Image;
+      // Attachments in the KB render inline; remote images stay links (no tracking pixels).
+      const rel = p.resolveAsset?.(im.href) ?? null;
+      if (rel && isImage(rel)) return <AssetImage rel={rel} alt={im.text} />;
       return (
-        <Text onPress={() => p.onLink?.(im.href)} style={web({ color: c.purpleTint, cursor: 'pointer' })}>
-          🖼 {im.text || im.href}
+        <Text onPress={() => p.onLink?.(rel ?? im.href)} style={web({ color: c.purpleTint, cursor: 'pointer' })}>
+          {rel ? <Icon name="attach_file" size={14} color={c.purpleTint} /> : '🖼 '}
+          {im.text || im.href}
+        </Text>
+      );
+    }
+    case 'wikilink': {
+      const wt = tok as unknown as WikiToken;
+      const w = parseWikiLink(wt.inner);
+      const target = p.resolveWiki ? p.resolveWiki(wt.inner) : null;
+      if (wt.embed && target && isImage(target)) return <AssetImage rel={target} alt={w.alias ?? wikiLabel(w)} width={w.width} />;
+      const missing = !!p.resolveWiki && !target;
+      return (
+        <Text
+          onPress={() => p.onLink?.(`[[${wt.inner}]]`)}
+          style={web(
+            missing
+              ? { color: c.ink3, cursor: 'pointer', textDecorationLine: 'underline', textDecorationStyle: 'dashed' }
+              : { color: c.purpleTint, cursor: 'pointer' },
+          )}
+        >
+          {wt.embed ? <Icon name={target && /\.pdf$/i.test(target) ? 'picture_as_pdf' : 'subdirectory_arrow_right'} size={14} color={missing ? c.ink3 : c.purpleTint} /> : null}
+          {wikiLabel(w) || wt.inner}
         </Text>
       );
     }

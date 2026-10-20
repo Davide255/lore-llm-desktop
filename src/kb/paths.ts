@@ -1,6 +1,6 @@
 import type { FolderNode, TreeNode } from './types';
 
-export type FileKind = 'index' | 'checklist' | 'doc';
+export type FileKind = 'index' | 'checklist' | 'doc' | 'attachment';
 
 export const basename = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 export const dirname = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
@@ -13,6 +13,7 @@ export function fileKind(p: string): FileKind {
   const n = basename(p).toLowerCase();
   if (n === 'index.md') return 'index';
   if (n === 'checklist.md') return 'checklist';
+  if (/\.(png|jpe?g|gif|webp|svg|pdf)$/.test(n)) return 'attachment';
   return 'doc';
 }
 
@@ -56,6 +57,9 @@ export function allFiles(tree: TreeNode[]): TreeNode[] {
   walk(tree);
   return out;
 }
+
+/** Paths of every file (notes and attachments). */
+export const filePaths = (tree: TreeNode[]) => allFiles(tree).map((n) => n.path);
 
 export function allFolders(tree: TreeNode[]): FolderNode[] {
   const out: FolderNode[] = [];

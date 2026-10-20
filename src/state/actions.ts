@@ -4,7 +4,7 @@ import type { MenuItem, Route, useApp } from './app';
 
 type App = ReturnType<typeof useApp>;
 
-export type Capability = 'open' | 'edit' | 'rename' | 'move' | 'duplicate' | 'copyLink' | 'delete' | 'newHere';
+export type Capability = 'open' | 'edit' | 'obsidian' | 'rename' | 'move' | 'duplicate' | 'copyLink' | 'delete' | 'newHere';
 
 /** What can be done to an item. index.md is generated, so it's view-only;
  *  checklist.md keeps its name so agents can always find it. */
@@ -12,13 +12,22 @@ export function capabilities(path: string, node: TreeNode | null): Set<Capabilit
   if (!node) return new Set();
   if (node.kind === 'folder') return new Set(['open', 'newHere', 'rename', 'move', 'copyLink', 'delete']);
   const kind = fileKind(path);
-  if (kind === 'index') return new Set(['open', 'copyLink']);
-  if (kind === 'checklist') return new Set(['open', 'edit', 'copyLink', 'delete']);
-  return new Set(['open', 'edit', 'rename', 'move', 'duplicate', 'copyLink', 'delete']);
+  if (kind === 'index') return new Set(['open', 'obsidian', 'copyLink']);
+  if (kind === 'checklist') return new Set(['open', 'edit', 'obsidian', 'copyLink', 'delete']);
+  if (kind === 'attachment') return new Set(['open', 'rename', 'move', 'copyLink', 'delete']);
+  return new Set(['open', 'edit', 'obsidian', 'rename', 'move', 'duplicate', 'copyLink', 'delete']);
 }
 
 export function openRoute(node: TreeNode, edit = false): Route {
-  return node.kind === 'folder' ? { name: 'folder', path: node.path } : { name: 'file', path: node.path, edit: edit && fileKind(node.path) !== 'index' };
+  const kind = fileKind(node.path);
+  return node.kind === 'folder' ? { name: 'folder', path: node.path } : { name: 'file', path: node.path, edit: edit && kind !== 'index' && kind !== 'attachment' };
+}
+
+/** Double click / E / "Modifica" on an item: the editor (Lore or Obsidian), or just open it. */
+export function editNode(app: App, node: TreeNode) {
+  const kind = fileKind(node.path);
+  if (node.kind === 'file' && kind !== 'index' && kind !== 'attachment') app.editFile(node.path);
+  else app.navigate(openRoute(node));
 }
 
 export function itemMenu(app: App, path: string): MenuItem[] {
@@ -30,7 +39,8 @@ export function itemMenu(app: App, path: string): MenuItem[] {
   const sep = () => items.length && items[items.length - 1] !== 'sep' && items.push('sep');
 
   add('open', { icon: 'visibility', label: 'Apri', kbd: '⏎', onPress: () => app.navigate(openRoute(node)) });
-  add('edit', { icon: 'edit', label: 'Modifica', kbd: 'E', onPress: () => app.navigate(openRoute(node, true)) });
+  add('edit', { icon: 'edit', label: 'Modifica', kbd: 'E', onPress: () => editNode(app, node) });
+  if (app.obsidianReady) add('obsidian', { icon: 'open_in_new', label: 'Apri in Obsidian', onPress: () => app.openInObsidian(path) });
   if (can.has('newHere')) {
     items.push({ icon: 'note_add', label: 'Nuovo file qui', kbd: '⌘N', onPress: () => app.openDialog({ kind: 'newFile', dir: path }) });
     items.push({ icon: 'create_new_folder', label: 'Nuova cartella', onPress: () => app.openDialog({ kind: 'newFolder', dir: path }) });
@@ -64,7 +74,7 @@ export function handleItemShortcut(app: App, e: KeyboardEvent): boolean {
   if (mod && e.shiftKey && key === 'c' && can.has('copyLink')) return app.ops.copyLink(path), true;
   if (mod && !e.shiftKey && key === 'd' && can.has('duplicate')) return app.ops.duplicate(path), true;
   if (((mod && key === 'backspace') || key === 'delete') && can.has('delete')) return app.openDialog({ kind: 'delete', path }), true;
-  if (!mod && !e.shiftKey && !e.altKey && key === 'e' && can.has('edit') && node) return app.navigate(openRoute(node, true)), true;
+  if (!mod && !e.shiftKey && !e.altKey && key === 'e' && can.has('edit') && node) return editNode(app, node), true;
   return false;
 }
 
