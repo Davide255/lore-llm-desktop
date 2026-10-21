@@ -3,6 +3,9 @@
 Desktop editor for the knowledge base you share with your agents. UI implemented from the
 Claude Design file *KB Desktop* (Athly design system, dark).
 
+Part of Lore LLM: [backend](https://github.com/Davide255/lore-llm) ·
+[mobile app](https://github.com/Davide255/lore-llm-mobile).
+
 ## Knowledge base model
 
 - The KB lives in your cloud space on the Lore server; each top-level folder is a **project**.
@@ -77,7 +80,7 @@ npm run dist       # installer via electron-builder (release/)
 ## Sign in with Google
 
 Optional; the local knowledge base works without an account. Login goes through the
-Cognito user pool the lore-llm Worker trusts, with Google as federated IdP
+Cognito user pool the [lore-llm](https://github.com/Davide255/lore-llm) Worker trusts, with Google as federated IdP
 (`electron/auth.cjs`): Authorization Code + PKCE in the system browser, callback on
 `http://localhost:42813/callback`. Tokens stay in the main process, encrypted with
 `safeStorage` in `<userData>/lore-auth.bin`; the renderer only sees name and email.
