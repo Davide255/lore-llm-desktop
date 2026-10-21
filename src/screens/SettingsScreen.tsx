@@ -155,6 +155,7 @@ function Updates() {
   if (!info) return null;
   const busy = info.phase === 'checking' || info.phase === 'downloading';
   return (
+    <>
     <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
       <IconWell icon="system_update" tint="blue" />
       <View style={{ flex: 1, minWidth: 0 }}>
@@ -173,6 +174,19 @@ function Updates() {
         info.enabled && <Btn icon="refresh" label="Controlla" onPress={() => lore.otaCheck().catch(() => {})} />
       )}
     </Card>
+    {info.enabled && (
+      <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+        <IconWell icon="science" tint="info" />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={t(500, 14, 1.3)}>Versioni beta</Text>
+          <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 4 })}>
+            Ricevi gli aggiornamenti in anteprima, prima del rilascio a tutti. Possono contenere errori.
+          </Text>
+        </View>
+        <Toggle value={info.channel === 'beta'} disabled={busy} onChange={(on) => lore.otaSetChannel(on ? 'beta' : 'production').then((next) => { setInfo(next); return lore.otaCheck(); }).catch(() => {})} />
+      </Card>
+    )}
+    </>
   );
 }
 

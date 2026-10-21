@@ -13,7 +13,7 @@ Ships changes to the **renderer** (everything in `src/`, i.e. the built `dist/`)
 4. The bundle is used from the **next launch**, never while the app is running. `createWindow` then loads its `index.html` instead of the one inside the app (the preload and the main process are always the ones in the app).
 5. **Rollback.** The renderer calls `window.lore.otaReady()` as soon as its UI is mounted (`src/index.tsx`). If the first load fails, the renderer process dies, or no ready signal arrives within 20 s, the window is reloaded from the app's own bundle and the version is remembered as bad. If the app is killed before the signal, the next launch drops the bundle. A bad version is never downloaded again; publish a new one.
 6. **A newer installer wins.** A bundle is tied to the `app.getVersion()` it was downloaded for; after the user installs a different build the downloaded bundle is deleted. A manifest with a lower `x.y.z` than the running build is ignored, and so is anything not newer (`createdAt`) than the running or already downloaded bundle.
-7. Not active in `npm run dev`, `npm start` or the browser build. `LORE_OTA_DEV=1 npm start` exercises the update path from a source checkout, `LORE_NO_OTA=1` turns it off, `LORE_OTA_CHANNEL=beta` follows the beta channel.
+7. Not active in `npm run dev`, `npm start` or the browser build. `LORE_OTA_DEV=1 npm start` exercises the update path from a source checkout, `LORE_NO_OTA=1` turns it off, `LORE_OTA_CHANNEL=beta` sets the default channel.
 
 ## One-time setup
 1. The signing key is `~/.lore-llm-ota/desktop/private-key.pem` (outside the repo, `chmod 600`). **Back it up** (password manager). The public key is baked into the installers: if the private key is lost, installed apps can never be updated again and a new installer with a new key is needed. To make a new pair: `openssl genrsa -out private-key.pem 2048 && openssl rsa -in private-key.pem -pubout -out electron/ota-public-key.pem`.
@@ -39,7 +39,7 @@ Server layout (`electron/ota.config.json` → `baseUrl`):
 `LORE_*` build variables (`LORE_API_URL`, …) are inlined by Vite, so publish with the same environment as the installer.
 
 ## Channels
-`beta` and `production`. Installers follow `production`; `LORE_OTA_CHANNEL=beta` follows beta (no in-app switch yet).
+`beta` and `production`. Installers follow `production`. **Everyone** can switch in Settings → Generale → "Versioni beta": the choice is stored in `userData/ota/state.json`, takes effect immediately (a check runs right away) and survives restarts. `LORE_OTA_CHANNEL=beta` only changes the default for a profile that has not chosen. Updates only move forward, so switching back to production keeps the beta bundle until production publishes something newer.
 
 ## Rollback of a release that runs but misbehaves
 Revert the change, bump `version` in `package.json` and publish again. Devices only move forward (a different version string that is also newer by `createdAt`), so re-uploading an older manifest has no effect, and neither has re-publishing the same version.

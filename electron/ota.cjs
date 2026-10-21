@@ -17,6 +17,7 @@ const MAX_FILES = 2000;
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 200 * 1024 * 1024;
 const MAX_BAD = 20;
+const CHANNELS = ['beta', 'production'];
 
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -106,11 +107,11 @@ const sha256Hex = (buf) => crypto.createHash('sha256').update(buf).digest('hex')
  * @param {(s: object) => void} [o.onStatus]
  * @param {typeof fetch} [o.fetch]
  */
-function createOta({ dir, appVersion, runtimeVersion, baseUrl, channel, publicKey, enabled, onStatus = () => {}, fetch: doFetch = globalThis.fetch }) {
+function createOta({ dir, appVersion, runtimeVersion, baseUrl, channel: defaultChannel, publicKey, enabled, onStatus = () => {}, fetch: doFetch = globalThis.fetch }) {
   const statePath = path.join(dir, 'state.json');
   const bundlesDir = path.join(dir, 'bundles');
   const bundleDir = (version) => path.join(bundlesDir, version);
-  const root = `${String(baseUrl).replace(/\/+$/, '')}/${channel}`;
+  const base = String(baseUrl).replace(/\/+$/, '');
 
   let loaded = null; // bundle the window was started from (null: the one inside the app)
   let phase = 'idle';
@@ -126,9 +127,9 @@ function createOta({ dir, appVersion, runtimeVersion, baseUrl, channel, publicKe
   const readState = () => {
     try {
       const s = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-      return { current: s.current ?? null, pending: s.pending ?? null, bad: Array.isArray(s.bad) ? s.bad : [] };
+      return { current: s.current ?? null, pending: s.pending ?? null, bad: Array.isArray(s.bad) ? s.bad : [], channel: CHANNELS.includes(s.channel) ? s.channel : null };
     } catch {
-      return { current: null, pending: null, bad: [] };
+      return { current: null, pending: null, bad: [], channel: null };
     }
   };
   const writeState = (s) => {
@@ -225,6 +226,19 @@ function createOta({ dir, appVersion, runtimeVersion, baseUrl, channel, publicKe
     loaded = null;
   }
 
+  /** The user's choice (Settings), else the build's default. */
+  const channel = () => readState().channel ?? defaultChannel;
+
+  /** Follow `beta` or `production` from now on; the next check looks there. */
+  function setChannel(next) {
+    if (!CHANNELS.includes(next)) throw new Error('unknown channel');
+    const s = readState();
+    s.channel = next === defaultChannel ? null : next;
+    writeState(s);
+    lastCheck = 0;
+    return info();
+  }
+
   const getBuffer = async (url, timeoutMs) => {
     const res = await doFetch(url, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs), headers: { 'cache-control': 'no-cache' } });
     if (res.status === 404) return null;
@@ -233,6 +247,7 @@ function createOta({ dir, appVersion, runtimeVersion, baseUrl, channel, publicKe
   };
 
   async function download(manifest) {
+    const root = `${base}/${channel()}`;
     const tmp = path.join(bundlesDir, `${manifest.version}.tmp`);
     const final = bundleDir(manifest.version);
     await fsp.rm(tmp, { recursive: true, force: true });
@@ -268,6 +283,7 @@ function createOta({ dir, appVersion, runtimeVersion, baseUrl, channel, publicKe
     lastCheck = Date.now();
     emit('checking');
     try {
+      const root = `${base}/${channel()}`;
       if (!/^https:\/\//i.test(root)) throw new Error('baseUrl must be https');
       const body = await getBuffer(`${root}/manifest.json`, MANIFEST_TIMEOUT_MS);
       if (!body) return emit('current'); // nothing published on this channel yet
@@ -297,12 +313,12 @@ function createOta({ dir, appVersion, runtimeVersion, baseUrl, channel, publicKe
     enabled,
     phase,
     appVersion,
-    channel,
+    channel: channel(),
     /** Version of the running downloaded bundle, null when the app runs its own. */
     version: loaded?.version ?? null,
   });
 
-  return { init, entryPath, confirm, rollback, check, info };
+  return { init, entryPath, confirm, rollback, check, info, setChannel };
 }
 
 module.exports = { createOta, baseVersion, compareBase, verifySignature, safeRelPath, parseManifest, isNewer };

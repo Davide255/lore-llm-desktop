@@ -189,3 +189,27 @@ test('http base URLs are refused', async () => {
   assert.equal(await ota.check({ force: true }), 'error');
   assert.equal(srv.hits.length, 0);
 });
+
+test('the user can follow another channel, and the choice survives a restart', async () => {
+  const dir = tmp();
+  const prod = server();
+  const beta = server({ version: '1.0.3-ota.d20261022t1000.gbbb', createdAt: '2026-10-22T10:00:00.000Z', files: { 'index.html': '<html>beta</html>' } });
+  // One fake host serving both channels.
+  const fetch = async (url) => {
+    const u = new URL(url);
+    return (u.pathname.includes('/beta/') ? beta : prod).fetch(url.replace('/beta/', '/prod/').replace('/production/', '/prod/'));
+  };
+  const ota = make(dir, { fetch }, { channel: 'production' });
+  ota.init();
+  assert.equal(ota.info().channel, 'production');
+  assert.equal(ota.setChannel('beta').channel, 'beta');
+  assert.equal(await ota.check(), 'ready', 'switching resets the throttle and fetches from beta');
+  assert.ok(beta.hits.length > 0, 'asked the beta server');
+  assert.equal(prod.hits.length, 0);
+
+  const next = make(dir, { fetch }, { channel: 'production' });
+  assert.equal(next.info().channel, 'beta', 'remembered');
+  assert.equal(fs.readFileSync(next.init(), 'utf8'), '<html>beta</html>');
+  assert.equal(next.setChannel('production').channel, 'production');
+  assert.throws(() => next.setChannel('nightly'), /unknown channel/);
+});

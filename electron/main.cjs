@@ -1385,6 +1385,7 @@ handle('ota:ready', () => {
 });
 handle('ota:status', () => ota?.info() ?? { enabled: false, phase: 'idle', appVersion: app.getVersion(), channel: 'production', version: null });
 handle('ota:check', () => ota?.check({ force: true }));
+handle('ota:setChannel', (channel) => ota.setChannel(channel));
 handle('app:confirmClose', () => {
   allowClose = true;
   win?.close();

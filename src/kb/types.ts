@@ -269,7 +269,7 @@ export interface OtaInfo {
   phase: OtaPhase;
   /** Version of the app build. */
   appVersion: string;
-  channel: string;
+  channel: 'beta' | 'production';
   /** Version of the running downloaded bundle; null when the app runs its own. */
   version: string | null;
 }
@@ -352,6 +352,8 @@ export interface LoreBridge {
   otaStatus(): Promise<OtaInfo>;
   /** Looks for a live update now (ignores the 15-minute throttle). */
   otaCheck(): Promise<OtaPhase>;
+  /** Follow the beta or the production live updates. */
+  otaSetChannel(channel: 'beta' | 'production'): Promise<OtaInfo>;
   authUser(): Promise<AuthUser | null>;
   signIn(provider?: SignInProvider): Promise<AuthUser | null>;
   cancelSignIn(): Promise<void>;
