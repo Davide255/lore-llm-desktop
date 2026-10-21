@@ -4,3 +4,9 @@ dist-web/
 release/
 *.log
 .DS_Store
+
+# Live updates (OTA): staged bundles and FTP credentials. The signing key lives in ~/.lore-llm-ota, never in the repo.
+ota-dist/
+.env
+*.pem
+!electron/ota-public-key.pem

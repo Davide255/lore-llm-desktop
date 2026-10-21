@@ -15,6 +15,8 @@ const { createMirror } = require('./mirror.cjs');
 const { scoped, teamOf, projectOf, checkProjectName, canWrite } = require('./spaces.cjs');
 const { VaultSync, scanVault, planSync, folderNames, kindOf } = require('./vault.cjs');
 const obsidian = require('./obsidian.cjs');
+const { createOta } = require('./ota.cjs');
+const otaConfig = require('./ota.config.json');
 
 const isMac = process.platform === 'darwin';
 // Mac App Store build: App Sandbox, so folders outside the container need the user's pick (and a bookmark).
@@ -691,6 +693,61 @@ function focusWindow() {
   win.focus();
 }
 
+// ---------------------------------------------------------------------------
+// Live updates (docs/OTA.md): the renderer can start from a signed bundle downloaded into
+// userData instead of the one inside the app. A bundle that never confirms it started is dropped.
+// ---------------------------------------------------------------------------
+const EMBEDDED_RENDERER = path.join(__dirname, '..', 'dist', 'index.html');
+const OTA_CONFIRM_TIMEOUT_MS = 20_000;
+let ota = null;
+let otaConfirmTimer = null;
+let otaConfirmed = false; // the window's current bundle said it started fine
+
+function startOta() {
+  ota = createOta({
+    dir: path.join(app.getPath('userData'), 'ota'),
+    appVersion: app.getVersion(),
+    runtimeVersion: otaConfig.runtimeVersion,
+    baseUrl: otaConfig.baseUrl,
+    channel: process.env.LORE_OTA_CHANNEL === 'beta' ? 'beta' : 'production',
+    publicKey: fs.readFileSync(path.join(__dirname, 'ota-public-key.pem'), 'utf8'),
+    // Packaged builds only: `electron .` and the dev server always run the working tree
+    // (LORE_OTA_DEV=1 lets a local run exercise the update path).
+    enabled: (app.isPackaged || !!process.env.LORE_OTA_DEV) && !DEV_URL && !process.env.LORE_NO_OTA,
+    onStatus: (status) => send('ota:status', { ...status, ...ota?.info(), phase: status.phase }),
+  });
+  ota.init();
+  setTimeout(() => ota.check(), 10_000);
+}
+
+function useEmbeddedRenderer(w, why) {
+  console.warn(`[ota] bundle rejected (${why}): back to the one inside the app`);
+  clearTimeout(otaConfirmTimer);
+  ota.rollback();
+  if (!w.isDestroyed()) w.loadFile(EMBEDDED_RENDERER);
+}
+
+function loadRenderer(w) {
+  const entry = ota?.entryPath();
+  if (!entry) return w.loadFile(EMBEDDED_RENDERER);
+  const wc = w.webContents;
+  otaConfirmed = false;
+  // Only until the bundle has confirmed itself: later crashes are not its startup failing.
+  const rejectable = () => !otaConfirmed && ota.entryPath();
+  wc.on('did-fail-load', (_e, code, description, _url, isMainFrame) => {
+    if (isMainFrame && code !== -3 && rejectable()) useEmbeddedRenderer(w, `load failed: ${description}`);
+  });
+  wc.on('render-process-gone', (_e, details) => {
+    if (rejectable()) useEmbeddedRenderer(w, `renderer gone: ${details.reason}`);
+  });
+  // The renderer says `ota:ready` once its UI is on screen; silence means a white screen.
+  clearTimeout(otaConfirmTimer);
+  otaConfirmTimer = setTimeout(() => {
+    if (rejectable()) useEmbeddedRenderer(w, 'no ready signal');
+  }, OTA_CONFIRM_TIMEOUT_MS);
+  return w.loadFile(entry);
+}
+
 function createWindow() {
   allowClose = false;
   win = new BrowserWindow({
@@ -715,7 +772,7 @@ function createWindow() {
   });
 
   if (DEV_URL) win.loadURL(DEV_URL);
-  else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+  else loadRenderer(win);
 
   // Links in rendered markdown open in the system browser (obsidian:// in Obsidian).
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -729,7 +786,10 @@ function createWindow() {
   });
 
   // Coming back to the app: look for agent writes right away.
-  win.on('focus', () => poll({ force: true }));
+  win.on('focus', () => {
+    poll({ force: true });
+    ota?.check();
+  });
 
   // Let the renderer veto closing when the editor has unsaved changes.
   win.on('close', (e) => {
@@ -1318,6 +1378,13 @@ handle('app:setPrefs', (prefs) => {
 });
 handle('app:copy', (text) => clipboard.writeText(text));
 handle('app:platform', () => process.platform);
+handle('ota:ready', () => {
+  otaConfirmed = true;
+  clearTimeout(otaConfirmTimer);
+  ota?.confirm();
+});
+handle('ota:status', () => ota?.info() ?? { enabled: false, phase: 'idle', appVersion: app.getVersion(), channel: 'production', version: null });
+handle('ota:check', () => ota?.check({ force: true }));
 handle('app:confirmClose', () => {
   allowClose = true;
   win?.close();
@@ -1384,6 +1451,7 @@ app.whenReady().then(() => {
   // `electron .` shows Electron's own icon in the Dock; the packaged app has the 1c icon in its bundle.
   if (isMac && !app.isPackaged) app.dock?.setIcon(path.join(__dirname, 'icon.png'));
   protocol.handle('lore-asset', serveAsset);
+  startOta();
   if (process.defaultApp) app.setAsDefaultProtocolClient('lore', process.execPath, [path.resolve(process.argv[1] ?? '.')]);
   else app.setAsDefaultProtocolClient('lore');
   auth.init((u) => {

@@ -581,6 +581,9 @@ export function createWebBridge(): LoreBridge {
     copy: (text) => navigator.clipboard.writeText(text),
     platform: async () => 'web',
     confirmClose: async () => {},
+    otaReady: async () => {},
+    otaStatus: async () => ({ enabled: false, phase: 'idle', appVersion: '', channel: 'production', version: null }),
+    otaCheck: async () => 'idle',
 
     async authUser() {
       await auth.ready();
@@ -602,6 +605,7 @@ export function createWebBridge(): LoreBridge {
     onVaultConfirm: none,
     onVaultNotice: notice.on,
     onNavigate: none,
+    onOtaStatus: none,
     onLoadProgress: none,
   };
 }

@@ -66,6 +66,9 @@ contextBridge.exposeInMainWorld('lore', {
   copy: call('app:copy'),
   platform: call('app:platform'),
   confirmClose: call('app:confirmClose'),
+  otaReady: call('ota:ready'),
+  otaStatus: call('ota:status'),
+  otaCheck: call('ota:check'),
   authUser: call('auth:user'),
   signIn: call('auth:signIn'),
   cancelSignIn: call('auth:cancelSignIn'),
@@ -81,4 +84,5 @@ contextBridge.exposeInMainWorld('lore', {
   onVaultConfirm: on('vault:confirm-request'),
   onVaultNotice: on('vault:notice'),
   onNavigate: on('app:navigate'),
+  onOtaStatus: on('ota:status'),
 });

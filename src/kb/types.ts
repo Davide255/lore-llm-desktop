@@ -261,6 +261,19 @@ export interface AuthUser {
 
 /** The bridge the Electron preload exposes (src/web/bridge.ts implements it for the browser).
  *  A react-native-windows/macos target would implement this same interface with a native module. */
+export type OtaPhase = 'idle' | 'checking' | 'downloading' | 'ready' | 'current' | 'error';
+
+export interface OtaInfo {
+  /** False in the browser build, in dev runs and when OTA is switched off. */
+  enabled: boolean;
+  phase: OtaPhase;
+  /** Version of the app build. */
+  appVersion: string;
+  channel: string;
+  /** Version of the running downloaded bundle; null when the app runs its own. */
+  version: string | null;
+}
+
 export interface LoreBridge {
   tree(fresh?: boolean): Promise<TreeNode[]>;
   /** Loads a project's files (once) and returns the updated tree. */
@@ -334,6 +347,11 @@ export interface LoreBridge {
   copy(text: string): Promise<void>;
   platform(): Promise<string>;
   confirmClose(): Promise<void>;
+  /** The UI is on screen: the live-update bundle this window started from is good. */
+  otaReady(): Promise<void>;
+  otaStatus(): Promise<OtaInfo>;
+  /** Looks for a live update now (ignores the 15-minute throttle). */
+  otaCheck(): Promise<OtaPhase>;
   authUser(): Promise<AuthUser | null>;
   signIn(provider?: SignInProvider): Promise<AuthUser | null>;
   cancelSignIn(): Promise<void>;
@@ -350,4 +368,5 @@ export interface LoreBridge {
   onVaultNotice(cb: (ev: { message: string }) => void): () => void;
   /** lore://open?path=… */
   onNavigate(cb: (ev: { path: string; heading?: string }) => void): () => void;
+  onOtaStatus(cb: (info: OtaInfo) => void): () => void;
 }

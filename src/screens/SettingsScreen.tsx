@@ -4,7 +4,7 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp, type SettingsSection } from '../state/app';
 import { allFiles, countFiles, projects, relTime } from '../kb/paths';
 import { isWeb, lore } from '../kb/bridge';
-import type { Agent, AgentKind, InviteRole, NewAgent, Permission, Team, TeamInvite, TeamMember, TeamRole, VaultProject, VaultStatus } from '../kb/types';
+import type { Agent, AgentKind, OtaInfo, OtaPhase, InviteRole, NewAgent, Permission, Team, TeamInvite, TeamMember, TeamRole, VaultProject, VaultStatus } from '../kb/types';
 import { canManage, INVITE_ROLES, looksLikeEmail, ROLE_HINT, ROLE_LABEL, sortMembers } from '../kb/teams';
 import { AGENT_KIND_LIST, AGENT_KINDS } from '../kb/agents';
 import { AgentAvatar } from '../ui/identity';
@@ -125,6 +125,7 @@ function General() {
           }
         />
       </Card>
+      {!isWeb && <Updates />}
       <Card style={{ gap: 10 }}>
         <Text style={t(500, 14, 1.3)}>File speciali</Text>
         <Row icon="auto_awesome" color={c.info} name="index.md" body="Compilato automaticamente dagli agenti: si legge e si condivide, non si modifica." />
@@ -132,6 +133,46 @@ function General() {
         <Row icon="description" color={c.ink3} name="*.md" body="Tutti gli altri file e cartelle: crei, modifichi, sposti ed elimini liberamente." />
       </Card>
     </>
+  );
+}
+
+const OTA_STATUS: Record<OtaPhase, string> = {
+  idle: 'Nessun controllo',
+  checking: 'Controllo…',
+  downloading: 'Download in corso…',
+  ready: "Scaricato: si installa al prossimo avvio dell'app",
+  current: 'Aggiornato',
+  error: 'Impossibile controllare',
+};
+
+/** Live updates (docs/OTA.md): the app build, the downloaded bundle it runs, and a manual check. */
+function Updates() {
+  const [info, setInfo] = useState<OtaInfo | null>(null);
+  useEffect(() => {
+    lore.otaStatus().then(setInfo).catch(() => {});
+    return lore.onOtaStatus(setInfo);
+  }, []);
+  if (!info) return null;
+  const busy = info.phase === 'checking' || info.phase === 'downloading';
+  return (
+    <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+      <IconWell icon="system_update" tint="blue" />
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={t(500, 14, 1.3)}>Aggiornamenti</Text>
+        <Text numberOfLines={1} style={{ fontFamily: font.mono, fontSize: 12.5, color: c.ink3, marginTop: 4 }}>
+          {info.appVersion}
+          {info.version ? ` · ${info.version}` : ''}
+        </Text>
+        <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 4 })}>
+          {info.enabled ? OTA_STATUS[info.phase] : 'Disattivati in questa build'}
+        </Text>
+      </View>
+      {busy ? (
+        <Spinner />
+      ) : (
+        info.enabled && <Btn icon="refresh" label="Controlla" onPress={() => lore.otaCheck().catch(() => {})} />
+      )}
+    </Card>
   );
 }
 
