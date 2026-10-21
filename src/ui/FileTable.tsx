@@ -3,8 +3,8 @@ import { Text, View } from 'react-native';
 import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { editNode, openItemMenu, openRoute } from '../state/actions';
-import { countFiles, fileKind, formatSize, projectOf, relTime } from '../kb/paths';
-import type { AgentRef, TreeNode } from '../kb/types';
+import { countFiles, fileKind, formatSize, projectLabel, projectOf, relTime } from '../kb/paths';
+import type { AgentRef, Author, TreeNode } from '../kb/types';
 import { eventPoint, Hover, Icon } from './primitives';
 import { AuthorChip } from './identity';
 
@@ -22,7 +22,7 @@ export function FileIcon({ node, size = 18 }: { node: TreeNode; size?: number })
   return <Icon name="description" size={size - 1} color={c.ink3} />;
 }
 
-export function AuthorCell({ author, agent }: { author: 'you' | 'agent'; agent?: AgentRef }) {
+export function AuthorCell({ author, agent }: { author: Author; agent?: AgentRef }) {
   return <AuthorChip author={author} agent={agent} />;
 }
 
@@ -70,7 +70,7 @@ export function FileTable({ rows, columns, header = true, empty }: { rows: TreeN
                   n.kind === 'file' ? <AuthorCell author={n.author} agent={n.agent} /> : <Text style={t(400, 13, 1, { color: c.ink3 })}>—</Text>
                 ) : (
                   <Text numberOfLines={1} style={t(400, 13, 1.2, { color: col === 'project' ? c.ink2 : c.ink3 })}>
-                    {col === 'size' ? (n.kind === 'folder' ? `${countFiles(n)} file` : formatSize(n.size)) : col === 'project' ? projectOf(n.path) ?? 'Radice' : relTime(n.mtime)}
+                    {col === 'size' ? (n.kind === 'folder' ? `${countFiles(n)} file` : formatSize(n.size)) : col === 'project' ? (projectOf(n.path) ? projectLabel(n.path) : 'Radice') : relTime(n.mtime)}
                   </Text>
                 )}
               </View>

@@ -4,7 +4,7 @@ import { c, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { AGENT_KINDS } from '../kb/agents';
 import type { AgentKind, AgentRef, Author } from '../kb/types';
-import { Avatar, initialsOf } from './primitives';
+import { Avatar, Icon, initialsOf } from './primitives';
 
 /** An agent's face: its client's picture, or initials when unknown/offline. */
 export function AgentAvatar({ agent, kind, size = 22, ring }: { agent?: AgentRef | null; kind?: AgentKind | null; size?: number; ring?: string }) {
@@ -21,14 +21,24 @@ export function AgentAvatar({ agent, kind, size = 22, ring }: { agent?: AgentRef
   );
 }
 
-/** Who wrote something: you (your initials) or the agent that did. */
+/** Who wrote something: you (your initials), a teammate, or the agent that did. */
 export function AuthorAvatar({ author, agent, size = 22 }: { author: Author; agent?: AgentRef; size?: number }) {
   const app = useApp();
   if (author === 'you') return <Avatar name={app.user?.name ?? 'Tu'} size={size} />;
+  if (author === 'teammate') return <TeammateAvatar size={size} />;
   return <AgentAvatar agent={agent} size={size} />;
 }
 
-export const authorName = (author: Author, agent?: AgentRef) => (author === 'you' ? 'Tu' : agent?.name ?? 'Agente');
+/** The server doesn't record which teammate wrote a file yet: a generic face. */
+function TeammateAvatar({ size }: { size: number }) {
+  return (
+    <View accessibilityLabel="Un collaboratore" style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: c.blue18, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <Icon name="group" size={Math.round(size * 0.62)} color={c.blueTint} />
+    </View>
+  );
+}
+
+export const authorName = (author: Author, agent?: AgentRef) => (author === 'you' ? 'Tu' : author === 'teammate' ? 'Un collaboratore' : agent?.name ?? 'Agente');
 
 /** Avatar + name, for table cells and rails. */
 export function AuthorChip({ author, agent, size = 22 }: { author: Author; agent?: AgentRef; size?: number }) {

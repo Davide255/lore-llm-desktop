@@ -27,7 +27,7 @@ export function ProjectsScreen() {
         <View style={{ flex: 1 }}>
           <Text style={t(700, 30, 1.15, { letterSpacing: -1.05 })}>Progetti</Text>
           <Text style={t(400, 13.5, 1, { color: c.ink3, marginTop: 9 })}>
-            {list.length} {list.length === 1 ? 'progetto' : 'progetti'} · {files.length} file
+            {list.length} {list.length === 1 ? 'progetto' : 'progetti'} · {list.reduce((sum, p) => sum + countFiles(p), 0)} file
           </Text>
         </View>
         <Btn icon="sort" label={sort === 'recent' ? 'Recenti' : 'Nome'} onPress={() => setSort(sort === 'recent' ? 'name' : 'recent')} />
@@ -101,7 +101,9 @@ function ProjectCard({ project }: { project: FolderNode }) {
   const app = useApp();
   const pi = projectIcon(project.name);
   const index = project.children.find((n) => n.kind === 'file' && n.name.toLowerCase() === 'index.md') as FileNode | undefined;
-  const checklist = project.children.find((n) => n.kind === 'file' && n.name.toLowerCase() === 'checklist.md') as FileNode | undefined;
+  // Progress comes with the project's summary, whether it's open or not.
+  const checklist = project.project?.checklist ?? (project.children.find((n) => n.kind === 'file' && n.name.toLowerCase() === 'checklist.md') as FileNode | undefined);
+  const loaded = project.project?.loaded ?? true;
   const n = countFiles(project);
   return (
     <Hover
@@ -137,7 +139,7 @@ function ProjectCard({ project }: { project: FolderNode }) {
         </Hover>
       </View>
       <Text numberOfLines={2} style={t(400, 13, 1.5, { color: index?.summary ? c.ink2 : c.ink3 })}>
-        {index?.summary || (index ? 'index.md in attesa di un riepilogo.' : 'Nessun index.md: verrà generato dagli agenti.')}
+        {index?.summary || (index ? 'index.md in attesa di un riepilogo.' : loaded ? 'Nessun index.md: verrà generato dagli agenti.' : 'Apri il progetto per leggerne il riepilogo.')}
       </Text>
       <View style={{ flex: 1 }} />
       {checklist && checklist.total ? (

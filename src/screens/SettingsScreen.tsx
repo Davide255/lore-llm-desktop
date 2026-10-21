@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { c, font, radius, t, web } from '../theme';
 import { useApp, type SettingsSection } from '../state/app';
-import { allFiles, projects, relTime } from '../kb/paths';
+import { countFiles, projects, relTime } from '../kb/paths';
 import { lore } from '../kb/bridge';
 import type { Agent, AgentKind, NewAgent, Permission, VaultStatus } from '../kb/types';
 import { AGENT_KIND_LIST, AGENT_KINDS } from '../kb/agents';
@@ -84,7 +84,7 @@ function Account() {
 
 function General() {
   const app = useApp();
-  const files = allFiles(app.tree).length;
+  const files = projects(app.tree).reduce((n, p) => n + countFiles(p), 0);
   return (
     <>
       <Header title="Generale" body="La knowledge base vive sul server Lore: ogni progetto è una cartella, condivisa con i tuoi agenti." />
@@ -96,7 +96,7 @@ function General() {
             {app.server}
           </Text>
           <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 4 })}>
-            {projects(app.tree).length} progetti · {files} file .md
+            {projects(app.tree).length} progetti · {files} file
           </Text>
         </View>
         <Btn

@@ -5,7 +5,7 @@ import { useApp } from '../state/app';
 import { editNode, openItemMenu, openRoute } from '../state/actions';
 import { countFiles, fileKind, projectIcon, projects, relTime, rootFiles } from '../kb/paths';
 import type { TreeNode } from '../kb/types';
-import { Avatar, eventPoint, Hover, Icon, Kbd, Pill } from '../ui/primitives';
+import { Avatar, eventPoint, Hover, Icon, Kbd, Pill, Spinner } from '../ui/primitives';
 import { AgentAvatar } from '../ui/identity';
 
 export function Sidebar() {
@@ -111,12 +111,19 @@ function TreeRow({ node, depth }: { node: TreeNode; depth: number }) {
   else if (kind === 'attachment') icon = <Icon name={/\.pdf$/i.test(node.path) ? 'picture_as_pdf' : 'image'} size={16} color={c.blueTint} />;
   else icon = <Icon name="description" size={16} color={c.ink3} />;
 
+  const unloaded = isProject && node.kind === 'folder' && !!node.project && !node.project.loaded;
+  const loading = unloaded && app.opening.has(node.path);
   const onPress = () => {
     if (isFolder) {
       if (current) app.toggleExpanded(node.path);
       else app.toggleExpanded(node.path, true);
     }
     app.navigate(openRoute(node));
+  };
+  // Expanding a project that isn't loaded yet loads it.
+  const toggle = () => {
+    if (unloaded && !open) app.openProject(node.path).catch(() => {});
+    app.toggleExpanded(node.path);
   };
 
   return (
@@ -138,7 +145,7 @@ function TreeRow({ node, depth }: { node: TreeNode; depth: number }) {
           <Hover
             onPress={(e) => {
               (e as any).stopPropagation?.();
-              app.toggleExpanded(node.path);
+              toggle();
             }}
             style={{ marginLeft: -2 }}
           >
@@ -174,6 +181,12 @@ function TreeRow({ node, depth }: { node: TreeNode; depth: number }) {
           </Hover>
         ) : null}
       </Hover>
+      {open && loading ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, height: 28, paddingLeft: 30 }}>
+          <Spinner size={12} />
+          <Text style={t(400, 12, 1, { color: c.ink3 })}>Caricamento…</Text>
+        </View>
+      ) : null}
       {open ? node.children.map((ch) => <TreeRow key={ch.path} node={ch} depth={depth + 1} />) : null}
     </>
   );

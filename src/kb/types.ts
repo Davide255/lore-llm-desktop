@@ -1,4 +1,7 @@
-export type Author = 'you' | 'agent';
+/** Who wrote a file. 'teammate': someone else in a team's project (the server doesn't say who yet). */
+export type Author = 'you' | 'agent' | 'teammate';
+
+export type TeamRole = 'owner' | 'editor' | 'viewer';
 
 export type AgentKind = 'claude' | 'codex';
 
@@ -28,6 +31,21 @@ export interface FileNode {
   summary?: string;
 }
 
+/** A project at the top of the tree. Projects load when opened: until then `children` is empty and the counts come from the server. */
+export interface ProjectMeta {
+  /** `Name`, or `Name@<teamId>` for a team's project (the first segment of its paths). */
+  key: string;
+  /** Display name, without the team. */
+  name: string;
+  loaded: boolean;
+  team: { id: string; name: string } | null;
+  /** The signed-in user's role on it ('owner' for their own projects). */
+  access: TeamRole;
+  fileCount: number;
+  updatedAt: number;
+  checklist: { done: number; total: number } | null;
+}
+
 export interface FolderNode {
   kind: 'folder';
   name: string;
@@ -35,6 +53,8 @@ export interface FolderNode {
   mtime: number;
   size: 0;
   children: TreeNode[];
+  /** Top-level folders (projects) only. */
+  project?: ProjectMeta;
 }
 
 export type TreeNode = FileNode | FolderNode;
@@ -175,7 +195,7 @@ export interface ChangedEvent {
   paths: string[];
   external: boolean;
   /** Who made an external change. */
-  source?: 'agent' | 'device' | 'obsidian';
+  source?: 'agent' | 'device' | 'obsidian' | 'teammate';
 }
 
 export type SignInProvider = 'google' | 'apple';
@@ -192,6 +212,10 @@ export interface AuthUser {
  *  target would implement this same interface with a native module. */
 export interface LoreBridge {
   tree(fresh?: boolean): Promise<TreeNode[]>;
+  /** Loads a project's files (once) and returns the updated tree. */
+  openProject(key: string): Promise<TreeNode[]>;
+  /** Loads every project not opened yet (for search across all of them). */
+  loadAll(): Promise<TreeNode[]>;
   read(path: string): Promise<FileContent>;
   write(path: string, content: string): Promise<boolean>;
   create(path: string, content: string): Promise<boolean>;
@@ -243,6 +267,7 @@ export interface LoreBridge {
   onAuthChanged(cb: (user: AuthUser | null) => void): () => void;
   onChanged(cb: (ev: ChangedEvent) => void): () => void;
   onActivity(cb: (ev: ActivityEvent) => void): () => void;
+  onLoadProgress(cb: (ev: { done: number; total: number }) => void): () => void;
   onCloseRequested(cb: () => void): () => void;
   onVaultStatus(cb: (s: VaultStatus) => void): () => void;
   onVaultConflict(cb: (ev: { path: string; copy: string }) => void): () => void;

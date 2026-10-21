@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { c, font, radius, t, web } from './theme';
 import { AppProvider, currentDir, useApp } from './state/app';
 import { handleItemShortcut } from './state/actions';
-import { fileKind } from './kb/paths';
+import { fileKind, projectKeyOf, unloadedProject } from './kb/paths';
 import { TitleBar } from './shell/TitleBar';
 import { Sidebar } from './shell/Sidebar';
 import { ProjectsScreen } from './screens/ProjectsScreen';
@@ -17,7 +17,7 @@ import { SettingsScreen } from './screens/SettingsScreen';
 import { DialogHost } from './dialogs/Dialogs';
 import { SearchPalette } from './dialogs/SearchPalette';
 import { PopupMenuLayer, ToastLayer } from './ui/overlays';
-import { Btn, Hover } from './ui/primitives';
+import { Btn, Hover, Spinner } from './ui/primitives';
 import loreIcon from './assets/lore-icon.png';
 
 export default function App() {
@@ -60,7 +60,13 @@ function Shell() {
 }
 
 function Main() {
-  const { route } = useApp();
+  const app = useApp();
+  const { route } = app;
+  // A project opened for the first time: its files are on their way.
+  if ((route.name === 'file' || route.name === 'folder') && unloadedProject(app.tree, route.path)) {
+    const key = projectKeyOf(route.path);
+    return <Loading text={app.opening.has(key) ? 'Apertura del progetto…' : 'Progetto non caricato.'} retry={app.opening.has(key) ? undefined : () => app.openProject(key).catch(() => {})} />;
+  }
   switch (route.name) {
     case 'projects':
       return <ProjectsScreen />;
@@ -130,10 +136,12 @@ function AppleButton({ onPress }: { onPress: () => void }) {
   );
 }
 
-function Loading() {
+function Loading({ text = 'Caricamento della knowledge base…', retry }: { text?: string; retry?: () => void }) {
   return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <Text style={t(400, 13.5, 1, { color: c.ink3 })}>Caricamento della knowledge base…</Text>
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+      {retry ? null : <Spinner size={22} />}
+      <Text style={t(400, 13.5, 1, { color: c.ink3 })}>{text}</Text>
+      {retry ? <Btn icon="refresh" label="Riprova" onPress={retry} /> : null}
     </View>
   );
 }

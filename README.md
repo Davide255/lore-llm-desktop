@@ -21,9 +21,16 @@ Part of Lore LLM: [backend](https://github.com/Davide255/lore-llm) ·
 - Links: markdown links (relative or KB-root relative), bare `name.md` mentions and Obsidian `[[wikilinks]]`
   (`[[Note#Heading|alias]]`). *Citato da* lists the notes that link to a file.
 
+Projects load when you open them. Launch reads one summary row per project (`/v1/projects`: file count,
+last change, checklist etag) and each `checklist.md`, so cards show progress without downloading anything
+else; a project's notes are fetched the first time it is opened, and the projects you opened lately load in
+the background at the next launch. Search, *Citato da* and wikilinks cover the projects already open; in ⌘K,
+*Cerca in tutti i progetti* loads the rest.
+
 Changes made elsewhere (agents over MCP, your other devices) are found by polling the server's change
-cursor (`/v1/version`): open views refresh, and each change lands in **Attività** with a side-by-side diff
-and *Ripristina*.
+cursors (`/v1/version`, one request: your space and each team's): open views refresh, and each change in an
+open project lands in **Attività** with a side-by-side diff and *Ripristina*. Projects not opened only refresh
+their card.
 
 ## Obsidian
 
@@ -70,8 +77,8 @@ npm install
 npm run dev        # Vite + Electron with hot reload
 npm run build      # typecheck + production bundle in dist/
 npm start          # run Electron on the built bundle
-npm test           # checklist, links, agents, mirror, merge, vault sync and Obsidian tests (Node ≥ 22.18; on older 22.x add --experimental-strip-types)
-npm run test:ui    # renderer in headless Chrome with a fake bridge (LORE_UI_SHOTS=<dir> saves screenshots)
+npm test           # checklist, links, agents, spaces, mirror, merge, vault sync and Obsidian tests (Node ≥ 22.18; on older 22.x add --experimental-strip-types)
+npm run test:ui    # renderer in headless Chrome with a fake bridge (LORE_UI_SHOTS=<dir> saves screenshots, LORE_CHROME=<path> uses another Chromium)
 npm run dist       # installer via electron-builder (release/)
 ```
 

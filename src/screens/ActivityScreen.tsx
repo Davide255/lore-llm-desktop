@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, Text, View, type TextStyle } from 'react-native';
 import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
-import { basename, findNode, projectOf, relTime } from '../kb/paths';
+import { basename, findNode, projectLabel, projectOf, relTime } from '../kb/paths';
 import type { ActivityEvent } from '../kb/types';
 import { Btn, FilterPill, Hover, Icon, Pill } from '../ui/primitives';
 import { AuthorAvatar } from '../ui/identity';
@@ -23,7 +23,7 @@ function dayLabel(ms: number) {
 const verb = (e: ActivityEvent) => {
   if (e.kind === 'conflict') return 'Conflitto su';
   const v = e.kind === 'created' ? 'creato' : e.kind === 'deleted' ? 'eliminato' : 'modificato';
-  return e.by === 'you' ? `Hai ${v}` : `${e.agent?.name ?? 'Un agente'} ha ${v}`;
+  return e.by === 'you' ? `Hai ${v}` : e.by === 'teammate' ? `Un collaboratore ha ${v}` : `${e.agent?.name ?? 'Un agente'} ha ${v}`;
 };
 
 /** Where one of your own changes was made, when not in Lore. */
@@ -94,7 +94,7 @@ function EventRow({ e, on, onPress }: { e: ActivityEvent; on: boolean; onPress: 
           {verb(e)} <Text style={{ fontFamily: font.mono }}>{basename(e.path)}</Text>
         </Text>
         <Text numberOfLines={1} style={t(400, 12, 1.35, { color: c.ink3, marginTop: 3 })}>
-          {projectOf(e.path) ?? 'Radice'} · {relTime(e.at)}
+          {projectOf(e.path) ? projectLabel(e.path) : 'Radice'} · {relTime(e.at)}
           {via(e) ? ` · ${via(e)}` : ''}
         </Text>
         {e.added || e.removed ? (
@@ -172,10 +172,10 @@ function EventDetail({ e }: { e: ActivityEvent }) {
         <AuthorAvatar author={e.by} agent={e.agent} size={36} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={t(600, 16, 1.3, { letterSpacing: -0.24 })}>
-            {e.kind === 'conflict' ? 'Modifiche in conflitto' : agent ? `Modifica di ${e.agent?.name ?? 'un agente'}` : via(e) ? `Tua modifica ${via(e)}` : 'Tua modifica'}
+            {e.kind === 'conflict' ? 'Modifiche in conflitto' : agent ? `Modifica di ${e.agent?.name ?? 'un agente'}` : e.by === 'teammate' ? 'Modifica di un collaboratore' : via(e) ? `Tua modifica ${via(e)}` : 'Tua modifica'}
           </Text>
           <Text numberOfLines={1} style={t(400, 12, 1.3, { color: c.ink3, marginTop: 2 })}>
-            <Text style={{ fontFamily: font.mono }}>{basename(e.path)}</Text> · {projectOf(e.path) ?? 'Radice'} · {relTime(e.at)} ·{' '}
+            <Text style={{ fontFamily: font.mono }}>{basename(e.path)}</Text> · {projectOf(e.path) ? projectLabel(e.path) : 'Radice'} · {relTime(e.at)} ·{' '}
             {e.kind === 'created' ? 'creazione' : e.kind === 'deleted' ? 'eliminazione' : e.kind === 'conflict' ? 'conflitto' : 'modifica'}
           </Text>
         </View>
