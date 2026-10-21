@@ -10,6 +10,8 @@ const on = (channel) => (cb) => {
 
 contextBridge.exposeInMainWorld('lore', {
   tree: call('kb:tree'),
+  openProject: call('kb:openProject'),
+  loadAll: call('kb:loadAll'),
   read: call('kb:read'),
   write: call('kb:write'),
   create: call('kb:create'),
@@ -55,6 +57,7 @@ contextBridge.exposeInMainWorld('lore', {
   onAuthChanged: on('auth:changed'),
   onChanged: on('kb:changed'),
   onActivity: on('kb:activity'),
+  onLoadProgress: on('kb:loadProgress'),
   onCloseRequested: on('app:close-requested'),
   onVaultStatus: on('vault:status'),
   onVaultConflict: on('vault:conflict'),

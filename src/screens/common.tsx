@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Text, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import { lore } from '../kb/bridge';
-import type { FileContent } from '../kb/types';
+import type { Author, FileContent } from '../kb/types';
 import { basename, dirname, filePaths, findNode, join, withMd } from '../kb/paths';
 import { isAttachment, parseWikiLink, resolveHref, resolveWikiTarget } from '../kb/links';
 import { useApp } from '../state/app';
@@ -229,6 +229,6 @@ export function EmptyState({ icon, title, body, action }: { icon: string; title:
   );
 }
 
-export function authorLabel(author: 'you' | 'agent') {
-  return author === 'you' ? 'Tu' : 'Agente';
+export function authorLabel(author: Author) {
+  return author === 'you' ? 'Tu' : author === 'teammate' ? 'Collaboratore' : 'Agente';
 }

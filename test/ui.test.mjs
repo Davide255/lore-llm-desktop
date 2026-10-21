@@ -25,7 +25,8 @@ before(async () => {
   server = await createServer({ root, configFile: path.join(root, 'vite.config.ts'), logLevel: 'silent', server: { port: 0, strictPort: false } });
   await server.listen();
   url = server.resolvedUrls.local[0];
-  browser = await chromium.launch({ channel: 'chrome', headless: true });
+  // LORE_CHROME=<path> uses that Chromium instead of the installed Chrome.
+  browser = await chromium.launch({ ...(process.env.LORE_CHROME ? { executablePath: process.env.LORE_CHROME } : { channel: 'chrome' }), headless: true });
 });
 
 after(async () => {
@@ -50,7 +51,17 @@ function fakeBridge({ signedIn, vault = false }) {
           { kind: 'file', name: 'test 1.md', path: 'Athly/test 1.md', mtime: now, size: 60, author: 'agent', agent: { id: 'a-claude', name: 'Claude', kind: 'claude' } },
           { kind: 'file', type: 'attachment', mime: 'image/png', name: 'pic.png', path: 'Athly/pic.png', mtime: now, size: 68, author: 'you' },
         ],
+        project: { key: 'Athly', name: 'Athly', loaded: true, team: null, access: 'owner', fileCount: 4, updatedAt: now, checklist: null },
       },
+      // Not opened yet: no children, counts and progress from the server's summary.
+      {
+        kind: 'folder', name: 'Archivio', path: 'Archivio', mtime: now - 86_400_000, size: 0, children: [],
+        project: { key: 'Archivio', name: 'Archivio', loaded: false, team: null, access: 'owner', fileCount: 5, updatedAt: now - 86_400_000, checklist: { done: 1, total: 3 } },
+      },
+    ],
+    archivio: [
+      { kind: 'file', name: 'checklist.md', path: 'Archivio/checklist.md', mtime: now - 86_400_000, size: 30, author: 'you', done: 1, total: 3 },
+      { kind: 'file', name: 'vecchio.md', path: 'Archivio/vecchio.md', mtime: now - 86_400_000, size: 30, author: 'agent' },
     ],
     activity: [
       { id: 'e1', at: now - 5_000, path: 'Athly/test 1.md', kind: 'created', by: 'agent', agent: { id: 'a-claude', name: 'Claude', kind: 'claude' }, added: 3, removed: 0, hunks: hunk(['# Test 1', '', 'Creato da Claude.']), before: null, after: '# Test 1\n\nCreato da Claude.\n' },
@@ -83,8 +94,22 @@ function fakeBridge({ signedIn, vault = false }) {
     return fn(...args);
   };
   const noop = () => () => {};
+  const load = (key) => {
+    const p = state.tree.find((n) => n.path === key);
+    if (p && !p.project.loaded) state.tree = state.tree.map((n) => (n === p ? { ...p, children: state[key.toLowerCase()] ?? [], project: { ...p.project, loaded: true } } : n));
+  };
   window.lore = {
     tree: rec('tree', async () => state.tree),
+    openProject: rec('openProject', async (key) => {
+      await new Promise((r) => setTimeout(r, 150));
+      load(key);
+      return state.tree;
+    }),
+    loadAll: rec('loadAll', async () => {
+      for (const n of state.tree) load(n.path);
+      return state.tree;
+    }),
+    onLoadProgress: () => () => {},
     read: rec('read', async (p) => ({ path: p, content: state.contents[p] ?? '# x\n\n## Sezione\n', mtime: now, size: 3, birthtime: now, author: 'agent' })),
     write: rec('write', async () => true),
     create: rec('create', async () => true),
@@ -280,6 +305,34 @@ test('attachments open in their own screen', async () => {
   await page.getByText('Usato in').waitFor();
   await page.getByText('Apri', { exact: true }).click();
   assert.deepEqual(await calls(page, 'openAttachment'), [['Athly/pic.png']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('projects load when opened: cards show the summary, the project loads on click', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Archivio', { exact: true }).first().waitFor();
+  assert.equal(await page.getByText('5 file', { exact: false }).count() > 0, true, 'the server count stands in');
+  await page.getByText('1/3', { exact: true }).first().waitFor();
+  assert.deepEqual(await calls(page, 'openProject'), [], 'nothing loads at launch');
+  await shot(page, '11-lazy-projects');
+  await page.getByText('Archivio', { exact: true }).last().click();
+  await page.getByText('Apertura del progetto…').waitFor();
+  await page.getByText('vecchio.md', { exact: true }).first().waitFor();
+  assert.deepEqual(await calls(page, 'openProject'), [['Archivio']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('search offers to load the projects not opened yet', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Cerca', { exact: true }).first().click();
+  await page.getByPlaceholder('Cerca in tutti i progetti…').fill('zebra');
+  await page.getByText('Cerca in tutti i progetti (1 non ancora aperti)').click();
+  await page.waitForFunction(() => window.__calls.some((c) => c.name === 'loadAll'));
+  await page.getByText('Cerca in tutti i progetti (1 non ancora aperti)').waitFor({ state: 'detached' });
+  // The query runs again over every project.
+  await page.waitForFunction(() => window.__calls.filter((c) => c.name === 'search').length >= 2);
   assert.deepEqual(errors, []);
   await page.close();
 });

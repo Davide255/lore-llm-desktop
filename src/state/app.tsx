@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { isWeb, lore } from '../kb/bridge';
 import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, NewAgent, ObsidianStatus, Permission, Prefs, SignInProvider, TreeNode, VaultStatus } from '../kb/types';
-import { basename, dirname, fileKind, findNode } from '../kb/paths';
+import { basename, dirname, fileKind, findNode, projectKeyOf, unloadedProject } from '../kb/paths';
 
 export type Route =
   | { name: 'projects' }
@@ -115,6 +115,14 @@ interface AppCtx {
   revision: number;
   changedPaths: string[];
   refresh: () => Promise<void>;
+  /** Loads a project's files (projects load when first opened). */
+  openProject: (key: string) => Promise<void>;
+  /** Projects being loaded right now. */
+  opening: Set<string>;
+  /** Loads every project not opened yet (search across all of them). */
+  loadAll: () => Promise<void>;
+  /** Progress of loadAll, null when idle. */
+  loadProgress: { done: number; total: number } | null;
   editorRef: React.MutableRefObject<EditorHandle | null>;
   ops: {
     createFile: (path: string, content: string) => Promise<void>;
@@ -163,6 +171,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [changedSource, setChangedSource] = useState<ChangedEvent['source']>();
   const [vault, setVault] = useState<VaultStatus | null>(null);
   const [obsidian, setObsidian] = useState<ObsidianStatus>({ installed: false, registered: false });
+  const [opening, setOpening] = useState<Set<string>>(new Set());
+  const [loadProgress, setLoadProgress] = useState<{ done: number; total: number } | null>(null);
   const editorRef = useRef<EditorHandle | null>(null);
   const lastUndo = useRef<{ run: () => void; until: number } | null>(null);
   const treeRef = useRef(tree);
@@ -171,6 +181,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async () => {
     const t = await lore.tree();
     setTree(t);
+  }, []);
+
+  const openingRef = useRef(new Set<string>());
+  const openProject = useCallback(async (key: string) => {
+    if (openingRef.current.has(key)) return;
+    openingRef.current.add(key);
+    setOpening(new Set(openingRef.current));
+    try {
+      setTree(await lore.openProject(key));
+    } finally {
+      openingRef.current.delete(key);
+      setOpening(new Set(openingRef.current));
+    }
+  }, []);
+
+  const loadAll = useCallback(async () => {
+    setLoadProgress({ done: 0, total: 0 });
+    try {
+      setTree(await lore.loadAll());
+      setRevision((v) => v + 1);
+    } finally {
+      setLoadProgress(null);
+    }
   }, []);
 
   const loadAgents = useCallback(async () => {
@@ -211,7 +244,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // Sign-in, sign-out, or a session that expired for good.
     const offAuth = lore.onAuthChanged(setUser);
     const offVault = lore.onVaultStatus(setVault);
+    const offProgress = lore.onLoadProgress((p) => setLoadProgress((cur) => (cur ? p : cur)));
     return () => {
+      offProgress();
       offChanged();
       offActivity();
       offAuth();
@@ -285,6 +320,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setMenu(null);
         setDrawerOpen(false);
         if (r.name === 'file' || r.name === 'folder') {
+          // Projects load when first opened; the screen shows a spinner meanwhile.
+          if (unloadedProject(treeRef.current, r.path)) openProject(projectKeyOf(r.path)).catch(fail);
           setSelected(r.path);
           // Reveal the target in the sidebar tree.
           const parts = r.path.split('/');
@@ -297,7 +334,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       }, opts?.force);
     },
-    [guard],
+    [guard, openProject, fail],
   );
 
   const back = useCallback(() => {
@@ -352,7 +389,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!loaded || !userId) return;
     lore.takePendingLink().then((link) => {
-      if (link && findNode(treeRef.current, link.path)) navigate({ name: 'file', path: link.path, ...(link.heading ? { heading: link.heading } : {}) });
+      if (link && (findNode(treeRef.current, link.path) || unloadedProject(treeRef.current, link.path))) navigate({ name: 'file', path: link.path, ...(link.heading ? { heading: link.heading } : {}) });
     });
   }, [loaded, userId, navigate]);
 
@@ -638,6 +675,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     revision,
     changedPaths,
     refresh,
+    openProject,
+    opening,
+    loadAll,
+    loadProgress,
     editorRef,
     ops,
   };

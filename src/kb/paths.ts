@@ -9,6 +9,37 @@ export const join = (...parts: string[]) => parts.filter(Boolean).join('/');
 /** Top-level folder a path belongs to; null for files in the KB root. */
 export const projectOf = (p: string): string | null => (p.includes('/') ? p.slice(0, p.indexOf('/')) : null);
 
+/** The project key a path starts with (the path itself for a project). */
+export const projectKeyOf = (p: string): string => (p.includes('/') ? p.slice(0, p.indexOf('/')) : p);
+
+// A team's project is `Name@<teamId>` (electron/spaces.cjs): the Worker's project names can't contain "@".
+/** The project's display name, without the team. */
+export const projectLabel = (p: string): string => {
+  const key = projectKeyOf(p);
+  const i = key.lastIndexOf('@');
+  return i > 0 ? key.slice(0, i) : key;
+};
+
+/** The team a path belongs to, or null for the user's own projects. */
+export const teamIdOf = (p: string): string | null => {
+  const key = projectKeyOf(p);
+  const i = key.lastIndexOf('@');
+  return i > 0 ? key.slice(i + 1) : null;
+};
+
+/** A path's folder for display: the project shown by name, without the team. */
+export const displayDir = (p: string): string => {
+  const d = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+  return d && projectLabel(d) + d.slice(projectKeyOf(d).length);
+};
+
+/** `newName` for the item at `path`: a team project keeps its team. */
+export function renamed(path: string, newName: string): string {
+  if (path.includes('/')) return join(dirname(path), newName);
+  const team = teamIdOf(path);
+  return team ? `${newName}@${team}` : newName;
+}
+
 export function fileKind(p: string): FileKind {
   const n = basename(p).toLowerCase();
   if (n === 'index.md') return 'index';
@@ -19,10 +50,11 @@ export function fileKind(p: string): FileKind {
 
 export const isReadOnly = (p: string) => fileKind(p) === 'index';
 
-export function validateName(name: string, kind: 'file' | 'folder'): string | null {
+export function validateName(name: string, kind: 'file' | 'folder' | 'project'): string | null {
   const n = name.trim();
   if (!n) return 'Inserisci un nome';
   if (/[\\/:*?"<>|]/.test(n)) return 'Caratteri non ammessi: \\ / : * ? " < > |';
+  if (kind === 'project' && n.includes('@')) return 'Il nome del progetto non può contenere «@»';
   if (n.startsWith('.')) return 'Il nome non può iniziare con un punto';
   if (kind === 'file' && n.replace(/\.md$/i, '').toLowerCase() === 'index') return 'index.md è generato dagli agenti';
   return null;
@@ -43,7 +75,16 @@ export function findNode(tree: TreeNode[], path: string): TreeNode | null {
 
 export function countFiles(node: TreeNode): number {
   if (node.kind === 'file') return 1;
+  // A project not opened yet has no children: the server's count stands in.
+  if (node.project && !node.project.loaded) return node.project.fileCount;
   return node.children.reduce((s, c) => s + countFiles(c), 0);
+}
+
+/** A project (or anything inside it) whose files are not loaded yet. */
+export function unloadedProject(tree: TreeNode[], path: string): FolderNode | null {
+  const key = projectKeyOf(path);
+  const node = tree.find((n): n is FolderNode => n.kind === 'folder' && n.path === key);
+  return node?.project && !node.project.loaded ? node : null;
 }
 
 export function allFiles(tree: TreeNode[]): TreeNode[] {

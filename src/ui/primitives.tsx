@@ -277,6 +277,16 @@ export function Progress({ value, height = 4, style }: { value: number; height?:
   );
 }
 
+/** Something is loading: a small ring that turns. */
+export function Spinner({ size = 18, color = c.purpleTint }: { size?: number; color?: string }) {
+  return (
+    <View
+      accessibilityLabel="Caricamento"
+      style={[{ width: size, height: size, borderRadius: size / 2, borderWidth: 2, borderColor: c.fill12 }, web({ borderTopColor: color, animation: 'lore-spin .8s linear infinite' })]}
+    />
+  );
+}
+
 export function Toggle({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
     <Hover

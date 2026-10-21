@@ -65,3 +65,6 @@ textarea::selection {
   from { transform: translateX(-100%); }
   to { transform: none; }
 }
+@keyframes lore-spin {
+  to { transform: rotate(360deg); }
+}

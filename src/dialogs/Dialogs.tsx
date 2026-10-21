@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { c, font, radius, t } from '../theme';
 import { useApp } from '../state/app';
-import { allFolders, basename, countFiles, dirname, fileKind, findNode, join, templateContent, validateName, withMd, type Template } from '../kb/paths';
+import { allFolders, basename, teamIdOf, countFiles, dirname, fileKind, findNode, join, projectLabel, renamed, templateContent, validateName, withMd, type Template } from '../kb/paths';
 import { Btn, Field, FieldLabel, Hint, Hover, Icon, IconWell, InfoStrip } from '../ui/primitives';
 import { DialogFooter, DialogFrame, DialogTitle, anchorBelow } from '../ui/overlays';
 import { VaultConfirmDialog, VaultDisableDialog, VaultSetupDialog } from './VaultDialogs';
@@ -36,10 +36,13 @@ export function DialogHost() {
 }
 
 /** Folder picker used by "Nuovo file" and "Sposta in…". */
-function FolderSelect({ value, onChange, exclude }: { value: string; onChange: (v: string) => void; exclude?: string }) {
+function FolderSelect({ value, onChange, exclude, sameSpaceAs }: { value: string; onChange: (v: string) => void; exclude?: string; sameSpaceAs?: string }) {
   const app = useApp();
   const ref = useRef<View>(null);
-  const folders = allFolders(app.tree).filter((f) => !exclude || (f.path !== exclude && !f.path.startsWith(exclude + '/')));
+  // Items move only within one space (the user's own, or one team's).
+  const folders = allFolders(app.tree)
+    .filter((f) => !exclude || (f.path !== exclude && !f.path.startsWith(exclude + '/')))
+    .filter((f) => sameSpaceAs === undefined || teamIdOf(f.path) === teamIdOf(sameSpaceAs));
   return (
     <View ref={ref}>
       <Hover
@@ -51,7 +54,7 @@ function FolderSelect({ value, onChange, exclude }: { value: string; onChange: (
             width: a.width,
             items: [
               { icon: 'home', label: 'Radice della knowledge base', checked: value === '', onPress: () => onChange('') },
-              ...folders.map((f) => ({ icon: f.path.includes('/') ? 'folder' : 'folder_special', label: `${'   '.repeat(f.path.split('/').length - 1)}${f.path}/`, checked: value === f.path, onPress: () => onChange(f.path) })),
+              ...folders.map((f) => ({ icon: f.path.includes('/') ? 'folder' : 'folder_special', label: `${'   '.repeat(f.path.split('/').length - 1)}${projectLabel(f.path)}${f.path.slice(f.path.split('/')[0].length)}/`, checked: value === f.path, onPress: () => onChange(f.path) })),
             ],
           });
         }}
@@ -59,7 +62,7 @@ function FolderSelect({ value, onChange, exclude }: { value: string; onChange: (
       >
         <Icon name="folder" filled size={17} color={c.blueTint} />
         <Text numberOfLines={1} style={{ flex: 1, fontFamily: font.mono, fontSize: 13.5, color: c.ink }}>
-          {value ? `${value}/` : 'Radice/'}
+          {value ? `${projectLabel(value)}${value.slice(value.split('/')[0].length)}/` : 'Radice/'}
         </Text>
         <Icon name="unfold_more" size={17} color={c.ink3} />
       </Hover>
@@ -154,7 +157,7 @@ function NameDialog({ title, dir, kind, onClose }: { title: string; dir: string;
   const [withChecklist, setWithChecklist] = useState(true);
   const [touched, setTouched] = useState(false);
   const path = join(kind === 'project' ? '' : where, name.trim());
-  const err = validateName(name, 'folder') ?? (findNode(app.tree, path) ? 'Esiste già un elemento con questo nome' : null);
+  const err = validateName(name, kind) ?? (findNode(app.tree, path) ? 'Esiste già un elemento con questo nome' : null);
 
   const submit = async () => {
     setTouched(true);
@@ -210,11 +213,12 @@ function RenameDialog({ path, onClose }: { path: string; onClose: () => void }) 
   const app = useApp();
   const node = findNode(app.tree, path);
   const isFile = node?.kind === 'file';
-  const [name, setName] = useState(isFile ? basename(path).replace(/\.md$/i, '') : basename(path));
+  const isProject = !isFile && !path.includes('/');
+  const [name, setName] = useState(isFile ? basename(path).replace(/\.md$/i, '') : isProject ? projectLabel(path) : basename(path));
   const [touched, setTouched] = useState(false);
-  const next = join(dirname(path), isFile ? withMd(name.trim()) : name.trim());
+  const next = renamed(path, isFile ? withMd(name.trim()) : name.trim());
   const reserved = isFile && fileKind(next) === 'checklist' && fileKind(path) !== 'checklist' && findNode(app.tree, next);
-  const err = validateName(name, isFile ? 'file' : 'folder') ?? (next !== path && findNode(app.tree, next) ? 'Esiste già un elemento con questo nome' : null) ?? (reserved ? 'checklist.md esiste già' : null);
+  const err = validateName(name, isFile ? 'file' : isProject ? 'project' : 'folder') ?? (next !== path && findNode(app.tree, next) ? 'Esiste già un elemento con questo nome' : null) ?? (reserved ? 'checklist.md esiste già' : null);
 
   const submit = () => {
     setTouched(true);
@@ -261,7 +265,7 @@ function MoveDialog({ path, onClose }: { path: string; onClose: () => void }) {
           </Text>{' '}
           verrà spostato in:
         </Text>
-        <FolderSelect value={dir} onChange={setDir} exclude={node?.kind === 'folder' ? path : undefined} />
+        <FolderSelect value={dir} onChange={setDir} exclude={node?.kind === 'folder' ? path : undefined} sameSpaceAs={path} />
         {err ? <Hint tone="error">{err}</Hint> : null}
       </View>
       <DialogFooter>

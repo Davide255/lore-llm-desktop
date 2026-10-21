@@ -12,6 +12,7 @@ const auth = require('./auth.cjs');
 const { API_URL, request, requestRaw } = require('./api.cjs');
 const { toAgent, toPatch, applyAudit, refOf } = require('./agents.cjs');
 const { createMirror } = require('./mirror.cjs');
+const { scoped, teamOf, projectOf, checkProjectName, canWrite } = require('./spaces.cjs');
 const { VaultSync, scanVault, planSync, kindOf } = require('./vault.cjs');
 const obsidian = require('./obsidian.cjs');
 
@@ -44,7 +45,8 @@ const LEGACY_LIST_MS = 60_000;
 // ---------------------------------------------------------------------------
 const statePath = () => path.join(app.getPath('userData'), 'lore-state.json');
 // agentRefs: id -> { name, kind } for every agent ever seen, so revoked ones keep their identity.
-let state = { userId: null, activity: [], authors: {}, folders: [], agentRefs: {}, prefs: {}, lastSeenActivity: 0, lastLogId: 0, lastVersion: null };
+// openProjects: keys of the projects opened lately, loaded again in the background at launch.
+let state = { userId: null, activity: [], authors: {}, folders: [], agentRefs: {}, prefs: {}, lastSeenActivity: 0, lastLogId: 0, openProjects: [] };
 
 function loadState() {
   try {
@@ -67,9 +69,8 @@ function onUser(user) {
   primed = false;
   mirror.reset();
   writers = new Map();
-  state.lastVersion = null;
   if (user && user.id !== state.userId) {
-    state = { ...state, userId: user.id, activity: [], authors: {}, folders: [], agentRefs: {}, lastSeenActivity: 0, lastLogId: 0 };
+    state = { ...state, userId: user.id, activity: [], authors: {}, folders: [], agentRefs: {}, lastSeenActivity: 0, lastLogId: 0, openProjects: [] };
     saveState();
   }
   if (user) startVault().catch(() => {});
@@ -77,7 +78,9 @@ function onUser(user) {
 
 // ---------------------------------------------------------------------------
 // Paths — `Project/folder/file.md`, the same shape the Worker and agents use.
-// The Worker validates everything again; this only gives early, local errors.
+// A team's project is `Name@<teamId>` (spaces.cjs); the HTTP layer turns that
+// into `?owner=t:<teamId>`. The Worker validates everything again; this only
+// gives early, local errors.
 // ---------------------------------------------------------------------------
 const isMd = (name) => name.toLowerCase().endsWith('.md');
 const isIndex = (rel) => rel.split('/').length === 2 && rel.toLowerCase().endsWith('/index.md');
@@ -91,10 +94,39 @@ function checkFilePath(rel) {
   if (!isMd(rel)) throw new Error('Sono ammessi solo file .md');
 }
 
+const isKnownProject = (key) => mirror.summaries.has(key) || mirror.loaded.has(key);
+
+/** A project that doesn't exist yet gets a name typed by the user: "@" is reserved for team projects. */
+function checkNewProject(rel) {
+  const key = projectOf(rel);
+  if (!isKnownProject(key)) checkProjectName(key);
+}
+
+/** The signed-in user's role on a project: 'owner' in their own space, their team role otherwise. */
+function accessOf(rel) {
+  const key = projectOf(rel);
+  return mirror.summaries.get(key)?.access ?? (teamOf(key) ? mirror.teams.find((t) => t.id === teamOf(key))?.role ?? 'viewer' : 'owner');
+}
+
+/** Viewers read only: refused here with a clear message (the Worker answers 403 anyway). */
+function assertWritable(...rels) {
+  for (const rel of rels) if (!canWrite(accessOf(rel))) throw new Error('Hai accesso in sola lettura a questo progetto');
+}
+
+/**
+ * Before reading or changing anything in a project, have it mirrored: deleting or
+ * renaming a project nobody opened must act on all of its files, not on none.
+ */
+async function ensureLoaded(...rels) {
+  for (const rel of rels) if (isKnownProject(projectOf(rel))) await mirror.loadProject(projectOf(rel));
+}
+
 // ---------------------------------------------------------------------------
-// Remote mirror (mirror.cjs): listing + note contents, refetched on etag change.
+// Remote mirror (mirror.cjs): project summaries for every space, and listing +
+// note contents of the projects that were opened, refetched on etag change.
 // ---------------------------------------------------------------------------
-const mirror = createMirror({ request, requestRaw });
+const kbRequest = scoped(request);
+const mirror = createMirror({ request: kbRequest, requestRaw: scoped(requestRaw) });
 const cache = mirror.cache; // rel -> { etag, content }
 let writers = new Map(); // rel -> id of the agent that last modified it (from the audit log)
 let primed = false;
@@ -111,17 +143,54 @@ async function refreshAgents() {
 
 const agentRef = (rel) => refOf(state.agentRefs, writers.get(rel));
 
+// Launch reads one summary row per project (and each checklist), never the notes.
 let priming = null;
 async function ensurePrimed() {
   if (primed) return;
   priming ??= (async () => {
-    await mirror.sync();
+    await mirror.syncSummaries();
     const [{ items }] = await Promise.all([request('GET', '/v1/audit', { query: { limit: AUDIT_WINDOW } }), refreshAgents()]);
     writers = new Map();
     state.lastLogId = applyAudit(writers, items, 0);
     primed = true;
+    warmOpenProjects();
   })().finally(() => (priming = null));
   await priming;
+}
+
+// The projects of the last working set load in the background, so they open instantly.
+function warmOpenProjects() {
+  const keys = state.openProjects.filter((k) => mirror.summaries.has(k) && !mirror.loaded.has(k));
+  if (!keys.length) return;
+  (async () => {
+    for (const key of keys) await mirror.loadProject(key).catch(() => {});
+    send('kb:changed', { paths: [], external: false });
+  })();
+}
+
+function rememberOpen(key) {
+  state.openProjects = [key, ...state.openProjects.filter((k) => k !== key)].slice(0, 12);
+  saveState();
+}
+
+/** Loads every project (search across all of them), reporting progress to the window. */
+let loadingAll = null;
+function loadAllProjects() {
+  loadingAll ??= (async () => {
+    const keys = [...mirror.summaries.keys()].filter((k) => !mirror.loaded.has(k));
+    let done = 0;
+    send('kb:loadProgress', { done, total: keys.length });
+    const queue = [...keys];
+    await Promise.all(
+      Array.from({ length: Math.min(3, queue.length) }, async () => {
+        while (queue.length) {
+          await mirror.loadProject(queue.shift()).catch(() => {});
+          send('kb:loadProgress', { done: ++done, total: keys.length });
+        }
+      }),
+    );
+  })().finally(() => (loadingAll = null));
+  return loadingAll;
 }
 
 /**
@@ -133,6 +202,11 @@ async function resync({ agentPaths } = {}) {
   const changes = await mirror.sync();
   for (const ch of changes) {
     if (ch.attachment || isIndex(ch.rel) || state.authors[ch.rel] === mirror.files.get(ch.rel)?.etag) continue;
+    // The server doesn't record who wrote a team file yet: anyone but this app is "a teammate".
+    if (teamOf(ch.rel)) {
+      recordChange(ch.rel, ch.before, ch.after, 'teammate');
+      continue;
+    }
     const byAgent = !agentPaths || agentPaths.has(ch.rel);
     recordChange(ch.rel, ch.before, ch.after, byAgent ? 'agent' : 'you', byAgent ? agentRef(ch.rel) : undefined, byAgent ? {} : { source: 'device' });
   }
@@ -159,15 +233,23 @@ function buildTree() {
     const segs = f.path.split('/');
     dirAt(segs.slice(0, -1)).set(segs[segs.length - 1], { file: f });
   }
-  return toNodes(root);
+  // Projects not opened yet: a node without children, carrying the summary.
+  for (const key of mirror.summaries.keys()) dirAt([key]);
+  return toNodes(root, true);
 }
 
-function toNodes(level) {
+function toNodes(level, top = false) {
   const out = [];
   for (const [name, entry] of level) {
     if (entry.dir) {
       const children = toNodes(entry.dir);
-      out.push({ kind: 'folder', name, path: entry.rel, mtime: Math.max(0, ...children.map((c) => c.mtime)), size: 0, children });
+      const node = { kind: 'folder', name, path: entry.rel, mtime: Math.max(0, ...children.map((c) => c.mtime)), size: 0, children };
+      if (top) {
+        node.project = projectMeta(name, children);
+        node.name = node.project.name;
+        if (!node.project.loaded) node.mtime = node.project.updatedAt;
+      }
+      out.push(node);
     } else if (!isMd(name)) {
       const f = entry.file;
       out.push({ kind: 'file', type: 'attachment', mime: mimeOf(f.path), name, path: f.path, mtime: Date.parse(f.uploaded), size: f.size, author: 'you' });
@@ -180,6 +262,26 @@ function toNodes(level) {
   const rank = (n) => (n.kind === 'file' && n.name.toLowerCase() === 'index.md' ? 0 : n.kind === 'file' && n.name.toLowerCase() === 'checklist.md' ? 1 : n.kind === 'folder' ? 2 : 3);
   out.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
   return out;
+}
+
+/** What a project card shows, whether the project is loaded or only summarised. */
+function projectMeta(key, children) {
+  const s = mirror.summaries.get(key);
+  const loaded = !s || mirror.loaded.has(key);
+  const count = (nodes) => nodes.reduce((n, c) => n + (c.kind === 'file' ? 1 : count(c.children)), 0);
+  const text = mirror.checklistText(key);
+  const checklist = text != null && (s?.checklist || mirror.files.has(`${key}/checklist.md`)) ? fileMeta('checklist.md', text) : null;
+  const team = s?.team ?? null;
+  return {
+    key,
+    name: s?.name ?? key.split('@')[0],
+    loaded,
+    team,
+    access: accessOf(key),
+    fileCount: loaded ? count(children) : s.file_count,
+    updatedAt: Date.parse(s?.updated_at ?? '') || 0,
+    checklist,
+  };
 }
 
 // Cheap per-file facts the sidebar and project cards show without a read.
@@ -206,8 +308,10 @@ function fileMeta(name, content = '') {
 }
 
 // A file is "yours" when the app wrote the version that is on the server now.
+// In a team's project anybody else is a teammate (agents can't reach team projects yet).
 function authorOf(rel) {
-  return state.authors[rel] && state.authors[rel] === mirror.files.get(rel)?.etag ? 'you' : 'agent';
+  if (state.authors[rel] && state.authors[rel] === mirror.files.get(rel)?.etag) return 'you';
+  return teamOf(rel) ? 'teammate' : 'agent';
 }
 
 function recordOwnWrite(rel, etag) {
@@ -270,9 +374,8 @@ async function poll({ force = false } = {}) {
   try {
     if (versionApi) {
       try {
-        const { version } = await request('GET', '/v1/version');
-        if (version === state.lastVersion) return;
-        state.lastVersion = version;
+        // One request: the cursors of the user's own space and of each team.
+        if (!(await mirror.changed())) return;
       } catch (err) {
         if (err.status !== 404) throw err;
         versionApi = false; // older server
@@ -289,17 +392,23 @@ async function poll({ force = false } = {}) {
     }
     if (!versionApi && !agentMoved && !(vault?.running && Date.now() - lastListAt > LEGACY_LIST_MS)) return;
     lastListAt = Date.now();
+    const stamp = summaryStamp();
     const agentPaths = versionApi ? new Set(items.filter((r) => r.log_id > prev).map((r) => r.target_path)) : undefined;
     const changes = await resync({ agentPaths });
+    await loadVaultProjects();
     vault?.kick();
     const notes = changes.filter((c) => !isIndex(c.rel));
-    if (changes.length) send('kb:changed', { paths: changes.map((c) => c.rel), external: notes.length > 0, source: notes.some((c) => agentPaths?.has(c.rel) ?? true) ? 'agent' : 'device' });
+    const source = notes.some((c) => !teamOf(c.rel) && (agentPaths?.has(c.rel) ?? true)) ? 'agent' : notes.some((c) => teamOf(c.rel)) ? 'teammate' : 'device';
+    // A project that isn't open changed only its summary: the tree still refreshes.
+    if (changes.length || stamp !== summaryStamp()) send('kb:changed', { paths: changes.map((c) => c.rel), external: notes.length > 0, source });
   } catch {
     /* offline or session gone: try again next tick */
   } finally {
     polling = false;
   }
 }
+
+const summaryStamp = () => JSON.stringify([...mirror.summaries.values()].map((s) => [s.key, s.updated_at, s.file_count, s.checklist?.etag, s.access, s.team?.name]));
 
 // ---------------------------------------------------------------------------
 // Pending deletes (undo window): contents are kept in memory and written
@@ -355,6 +464,37 @@ const syncDir = (userId) => path.join(app.getPath('userData'), 'sync', userId);
 // In the sandbox ~/Documents isn't reachable until the user picks a folder there.
 const defaultVaultRoot = () => (MAS ? null : path.join(app.getPath('documents'), 'Lore LLM'));
 
+/**
+ * The projects the local vault covers: the user's own. They are all loaded
+ * before the vault plans, and the vault only ever sees them: a project that is
+ * not loaded must never read as "deleted in the cloud".
+ */
+const vaultCovers = (key) => !teamOf(key);
+
+async function loadVaultProjects() {
+  if (!vault && !vaultStarting) return;
+  for (const key of mirror.summaries.keys()) if (vaultCovers(key) && !mirror.loaded.has(key)) await mirror.loadProject(key);
+}
+
+/** The mirror as the vault sees it: only the projects it covers, all of them loaded. */
+const vaultMirror = {
+  snapshot() {
+    const out = new Map();
+    for (const [rel, v] of mirror.snapshot()) if (rel.includes('/') && vaultCovers(projectOf(rel)) && mirror.loaded.has(projectOf(rel))) out.set(rel, v);
+    return out;
+  },
+  sync: async () => {
+    await mirror.sync();
+    await loadVaultProjects();
+  },
+  readText: (rel) => mirror.readText(rel),
+  readBlob: (rel) => mirror.readBlob(rel),
+  putText: (rel, content, opts) => mirror.putText(rel, content, opts),
+  putBlob: (rel, buf, opts) => mirror.putBlob(rel, buf, opts),
+  remove: (rel) => mirror.remove(rel),
+  move: (from, to) => mirror.move(from, to),
+};
+
 function releaseAccess() {
   releaseVaultAccess?.();
   releaseVaultAccess = null;
@@ -391,6 +531,7 @@ async function startVault() {
     if (!cfg.enabled || !cfg.root) return;
     // Never plan against an empty mirror: it would read as "everything was deleted".
     await ensurePrimed();
+    await loadVaultProjects();
     if (auth.user()?.id !== u.id) return;
     releaseAccess();
     if (MAS && cfg.bookmark) releaseVaultAccess = app.startAccessingSecurityScopedResource(cfg.bookmark);
@@ -401,7 +542,7 @@ async function startVault() {
       stateDir: syncDir(u.id),
       userId: u.id,
       server: serverId(),
-      mirror,
+      mirror: vaultMirror,
       trash: (abs) => shell.trashItem(abs),
       onEvent: onVaultEvent,
       remoteLabel: (rel) => (authorOf(rel) === 'agent' ? agentRef(rel)?.name ?? 'agente' : 'cloud'),
@@ -589,13 +730,30 @@ handle('kb:tree', async (fresh) => {
   return buildTree();
 });
 
+// Open a project: its files are listed and its notes downloaded (once; then polling keeps it fresh).
+handle('kb:openProject', async (key) => {
+  await ensurePrimed();
+  if (mirror.summaries.has(key) && !mirror.loaded.has(key)) await mirror.loadProject(key);
+  if (mirror.summaries.has(key)) rememberOpen(key);
+  return buildTree();
+});
+
+// Search across every project: the ones not opened yet are loaded first.
+handle('kb:loadAll', async () => {
+  await ensurePrimed();
+  await loadAllProjects();
+  return buildTree();
+});
+
 handle('kb:read', async (rel) => {
   await ensurePrimed();
+  await ensureLoaded(rel);
   const before = cache.get(rel)?.content ?? null;
   const f = await mirror.fetchFile(rel);
   // Opening a file is also a chance to notice an agent edit.
   if (before !== null && before !== f.content && state.authors[rel] !== f.etag) {
-    recordChange(rel, before, f.content, 'agent', agentRef(rel));
+    if (teamOf(rel)) recordChange(rel, before, f.content, 'teammate');
+    else recordChange(rel, before, f.content, 'agent', agentRef(rel));
     vault?.kick();
   }
   const mtime = Date.parse(f.uploaded);
@@ -604,6 +762,8 @@ handle('kb:read', async (rel) => {
 });
 
 handle('kb:write', async (rel, content) => {
+  assertWritable(rel);
+  await ensureLoaded(rel);
   const before = cache.get(rel)?.content ?? null;
   const file = await mirror.putText(rel, content, { overwrite: true, ifMatch: cache.get(rel)?.etag });
   recordOwnWrite(rel, file.etag);
@@ -615,6 +775,9 @@ handle('kb:write', async (rel, content) => {
 
 handle('kb:create', async (rel, content) => {
   checkFilePath(rel);
+  checkNewProject(rel);
+  assertWritable(rel);
+  await ensureLoaded(rel);
   const file = await mirror.putText(rel, content, { overwrite: false });
   recordOwnWrite(rel, file.etag);
   recordChange(rel, null, content, 'you');
@@ -625,6 +788,9 @@ handle('kb:create', async (rel, content) => {
 
 // Object storage has no empty folders: they live here (and in the vault) until a file is put in them.
 handle('kb:mkdir', async (rel) => {
+  checkNewProject(rel);
+  assertWritable(rel);
+  await ensureLoaded(rel);
   if (state.folders.includes(rel) || filesUnder(rel).length) throw new Error('Esiste già una cartella con questo nome');
   state.folders.push(rel);
   saveState();
@@ -633,6 +799,10 @@ handle('kb:mkdir', async (rel) => {
 });
 
 handle('kb:rename', async (fromRel, toRel) => {
+  if (teamOf(fromRel) !== teamOf(toRel)) throw new Error('Non puoi spostare file tra spazi diversi: per un progetto usa «Sposta in un team…»');
+  if (!fromRel.includes('/')) checkProjectName(projectOf(toRel).split('@')[0]);
+  assertWritable(fromRel, toRel);
+  await ensureLoaded(fromRel, toRel);
   if (mirror.has(toRel) || filesUnder(toRel).length || state.folders.includes(toRel)) throw new Error('Esiste già un elemento con questo nome');
   const moved = mirror.has(fromRel) ? [fromRel] : filesUnder(fromRel);
   const mine = new Set(moved.filter((k) => authorOf(k) === 'you'));
@@ -651,6 +821,8 @@ handle('kb:rename', async (fromRel, toRel) => {
 });
 
 handle('kb:duplicate', async (rel) => {
+  assertWritable(rel);
+  await ensureLoaded(rel);
   const dot = rel.toLowerCase().lastIndexOf('.md');
   const base = rel.slice(0, dot);
   let n = 1;
@@ -670,6 +842,8 @@ handle('kb:duplicate', async (rel) => {
 
 // Delete = keep the contents in memory, remove on the server; undo writes them back.
 handle('kb:delete', async (rel) => {
+  assertWritable(rel);
+  await ensureLoaded(rel);
   const isFile = mirror.has(rel);
   const affected = isFile ? [rel] : filesUnder(rel);
   const contents = Object.fromEntries(affected.filter((k) => isMd(k) && !isIndex(k)).map((k) => [k, cache.get(k)?.content ?? '']));
@@ -683,8 +857,8 @@ handle('kb:delete', async (rel) => {
     }
   }
   const folders = isFile ? [] : [...new Set([...state.folders.filter((f) => under(f, rel)), rel])];
-  if (isFile) await request('DELETE', '/v1/file', { query: { path: rel } });
-  else if (affected.length) await request('DELETE', '/v1/folder', { query: { path: rel } });
+  if (isFile) await kbRequest('DELETE', '/v1/file', { query: { path: rel } });
+  else if (affected.length) await kbRequest('DELETE', '/v1/folder', { query: { path: rel } });
   state.folders = state.folders.filter((f) => !under(f, rel));
   for (const k of affected) {
     const before = cache.get(k)?.content ?? null;
@@ -708,6 +882,7 @@ handle('kb:undoDelete', async (token) => {
   const d = pendingDeletes.get(token);
   if (!d) return false;
   pendingDeletes.delete(token);
+  await ensureLoaded(d.rel);
   if (mirror.has(d.rel) || filesUnder(d.rel).length) throw new Error('Un elemento con lo stesso nome è stato ricreato');
   for (const [k, content] of Object.entries(d.contents)) {
     const file = await mirror.putText(k, content, { overwrite: false });
@@ -785,6 +960,7 @@ handle('vault:preview', async (root) => {
   if (!u) throw new Error('Accesso richiesto');
   await ensurePrimed();
   if (!root && !defaultVaultRoot()) return { ok: false, root: '', error: 'Scegli una cartella per la copia locale.' };
+  for (const key of mirror.summaries.keys()) if (vaultCovers(key)) await mirror.loadProject(key);
   const abs = path.resolve(root || defaultVaultRoot());
   const exists = fs.existsSync(abs);
   let marker = null;
@@ -798,7 +974,7 @@ handle('vault:preview', async (root) => {
   }
   const visible = exists ? fs.readdirSync(abs).filter((n) => !n.startsWith('.')) : [];
   const scan = visible.length ? await scanVault(abs, {}) : { files: new Map(), unsynced: [] };
-  const actions = planSync({ manifest: {}, remote: mirror.snapshot(), local: scan.files, caseInsensitive: process.platform !== 'linux' });
+  const actions = planSync({ manifest: {}, remote: vaultMirror.snapshot(), local: scan.files, caseInsensitive: process.platform !== 'linux' });
   const count = (type) => actions.filter((a) => a.type === type).length;
   return {
     ok: true,

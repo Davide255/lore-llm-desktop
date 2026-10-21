@@ -201,7 +201,9 @@ async function setup(t, files = {}) {
   const engine = make();
   t.after(async () => {
     engine.stop();
-    await fsp.rm(dir, { recursive: true, force: true });
+    // A pass started by the watcher may still be writing the manifest.
+    await engine.queue;
+    await fsp.rm(dir, { recursive: true, force: true, maxRetries: 3 });
   });
   const disk = (rel) => fs.readFileSync(path.join(root, ...rel.split('/')), 'utf8');
   const write = async (rel, content) => {

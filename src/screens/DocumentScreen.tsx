@@ -4,7 +4,7 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { openItemMenu } from '../state/actions';
 import { lore } from '../kb/bridge';
-import { basename, fileKind, filePaths, formatSize, longDate, relTime, wordCount } from '../kb/paths';
+import { basename, fileKind, filePaths, formatSize, longDate, projects, relTime, wordCount } from '../kb/paths';
 import { backlinks as linksTo, sameHeading } from '../kb/links';
 import { AuthorAvatar, authorName } from '../ui/identity';
 import { Btn, Hover, Icon, IconBtn, InfoStrip, Kbd, useCompact } from '../ui/primitives';
@@ -66,7 +66,7 @@ export function DocumentScreen({ path }: { path: string }) {
   if (error) return <EmptyState icon="error" title="Impossibile aprire il file" body={error} />;
   if (!file) return <View style={{ flex: 1 }} />;
 
-  const author = file.author === 'you' ? 'da te' : file.agent ? `da ${file.agent.name}` : 'da un agente';
+  const author = file.author === 'you' ? 'da te' : file.author === 'teammate' ? 'da un collaboratore' : file.agent ? `da ${file.agent.name}` : 'da un agente';
   const subtitle = readOnly ? 'Generato · sola lettura' : `${formatSize(file.size)} · modificato ${relTime(file.mtime)} ${author}`;
 
   // Heading offsets are relative to the markdown root; add its own offset + padding.
@@ -202,6 +202,9 @@ export function DocumentScreen({ path }: { path: string }) {
                           </Text>
                         </Hover>
                       ))}
+                      {projects(app.tree).some((p) => p.project && !p.project.loaded) ? (
+                        <Text style={t(400, 11.5, 1.4, { color: c.ink3 })}>Solo dai progetti già aperti.</Text>
+                      ) : null}
                     </View>
                   </>
                 ) : null}

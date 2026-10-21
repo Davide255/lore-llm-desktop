@@ -350,6 +350,15 @@ export function createWebBridge(): LoreBridge {
       else await ensurePrimed();
       return buildTree();
     },
+    // The web build mirrors everything up front: nothing is lazy.
+    async openProject() {
+      await ensurePrimed();
+      return buildTree();
+    },
+    async loadAll() {
+      await ensurePrimed();
+      return buildTree();
+    },
 
     async read(rel) {
       await ensurePrimed();
@@ -573,5 +582,6 @@ export function createWebBridge(): LoreBridge {
     onVaultConfirm: none,
     onVaultNotice: notice.on,
     onNavigate: none,
+    onLoadProgress: none,
   };
 }

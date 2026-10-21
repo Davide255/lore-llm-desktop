@@ -4,6 +4,7 @@ import { c, font, t, web } from '../theme';
 import { useApp, type Route } from '../state/app';
 import { isWeb } from '../kb/bridge';
 import { Hover, Icon, isMac, useCompact } from '../ui/primitives';
+import { projectLabel } from '../kb/paths';
 
 const SETTINGS_LABEL = { account: 'Account', general: 'Generale', editor: 'Editor', obsidian: 'Obsidian', agents: 'Agenti', shortcuts: 'Scorciatoie' } as const;
 
@@ -22,7 +23,7 @@ function crumbs(route: Route): { label: string; mono?: boolean; to?: Route }[] {
       parts.forEach((p, i) => {
         const path = parts.slice(0, i + 1).join('/');
         const last = i === parts.length - 1;
-        out.push({ label: p, mono: route.name === 'file' && last, to: last ? undefined : { name: 'folder', path } });
+        out.push({ label: i === 0 ? projectLabel(p) : p, mono: route.name === 'file' && last, to: last ? undefined : { name: 'folder', path } });
       });
       return out;
     }

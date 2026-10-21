@@ -3,9 +3,9 @@ import { ScrollView, Text, TextInput, View, type TextStyle } from 'react-native'
 import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { lore } from '../kb/bridge';
-import { allFiles, basename, fileKind, projectOf, relTime } from '../kb/paths';
+import { allFiles, basename, fileKind, projectLabel, projectOf, projects, relTime } from '../kb/paths';
 import type { FileNode, SearchResult } from '../kb/types';
-import { FilterPill, Hover, Icon, isTouch, Kbd, useCompact } from '../ui/primitives';
+import { FilterPill, Hover, Icon, isTouch, Kbd, Spinner, useCompact } from '../ui/primitives';
 import { DialogFrame } from '../ui/overlays';
 
 type Item = { path: string; line?: number; snippet?: string; col?: number; extra?: number; recent?: number };
@@ -19,6 +19,8 @@ export function SearchPalette() {
   const [active, setActive] = useState(0);
   const [preview, setPreview] = useState<string | null>(null);
   const listRef = useRef<ScrollView>(null);
+  // Search covers the projects already opened; the others load on request.
+  const unloaded = projects(app.tree).filter((p) => p.project && !p.project.loaded).length;
 
   useEffect(() => {
     const query = q.trim();
@@ -28,12 +30,12 @@ export function SearchPalette() {
     }
     const h = setTimeout(() => lore.search(query).then(setResults), 110);
     return () => clearTimeout(h);
-  }, [q]);
+  }, [q, app.tree]);
 
   const counts = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of results) {
-      const p = projectOf(r.path) ?? 'Radice';
+      const p = projectOf(r.path) ?? '';
       m.set(p, (m.get(p) ?? 0) + Math.max(1, r.total));
     }
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
@@ -47,7 +49,7 @@ export function SearchPalette() {
         .map((f) => ({ path: f.path, recent: f.mtime }));
     }
     return results
-      .filter((r) => !project || (projectOf(r.path) ?? 'Radice') === project)
+      .filter((r) => project === null || (projectOf(r.path) ?? '') === project)
       .map((r) => (r.hits[0] ? { path: r.path, line: r.hits[0].line, col: r.hits[0].col, snippet: r.hits[0].text, extra: r.total - 1 } : { path: r.path }));
   }, [q, results, project, app.tree]);
 
@@ -112,7 +114,7 @@ export function SearchPalette() {
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingVertical: 12, paddingHorizontal: 20, borderBottomWidth: 1, borderColor: c.hair }}>
           <FilterPill label={`Tutti · ${totalHits}`} active={!project} onPress={() => setProject(null)} />
           {counts.map(([p, n]) => (
-            <FilterPill key={p} label={`${p} · ${n}`} active={project === p} onPress={() => setProject(p)} />
+            <FilterPill key={p} label={`${p ? projectLabel(p) : 'Radice'} · ${n}`} active={project === p} onPress={() => setProject(p)} />
           ))}
         </View>
       ) : null}
@@ -122,6 +124,19 @@ export function SearchPalette() {
           <Text style={t(400, 11.5, 1, { color: c.ink3, paddingVertical: 8, paddingHorizontal: 10 })}>
             {needle ? (items.length ? `${totalHits} risultati in ${results.length} file` : 'Nessun risultato') : 'Aperti di recente'}
           </Text>
+          {needle && (unloaded || app.loadProgress) ? (
+            <Hover
+              onPress={() => (app.loadProgress ? undefined : app.loadAll().catch(() => {}))}
+              style={({ hovered }) => ({ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 9, paddingHorizontal: 12, marginBottom: 4, borderRadius: radius.md, backgroundColor: hovered && !app.loadProgress ? c.fill06 : c.fill04 })}
+            >
+              {app.loadProgress ? <Spinner size={14} /> : <Icon name="travel_explore" size={16} color={c.purpleTint} />}
+              <Text style={[t(500, 12.5, 1.3, { color: app.loadProgress ? c.ink2 : c.purpleTint }), { flex: 1 }]}>
+                {app.loadProgress
+                  ? `Caricamento dei progetti… ${app.loadProgress.done}/${app.loadProgress.total}`
+                  : `Cerca in tutti i progetti (${unloaded} non ancora aperti)`}
+              </Text>
+            </Hover>
+          ) : null}
           {items.map((it, i) => {
             const on = i === active;
             const kind = fileKind(it.path);
@@ -138,7 +153,7 @@ export function SearchPalette() {
                     {basename(it.path)}
                   </Text>
                   <Text numberOfLines={1} style={[t(400, 11, 1, { color: c.ink3 }), { flexShrink: 1 }]}>
-                    · {projectOf(it.path) ?? 'Radice'}
+                    · {projectOf(it.path) ? projectLabel(it.path) : 'Radice'}
                   </Text>
                   <View style={{ flex: 1 }} />
                   {on ? <Kbd>⏎</Kbd> : it.recent ? <Text style={t(400, 11, 1, { color: c.ink3 })}>{relTime(it.recent)}</Text> : null}
