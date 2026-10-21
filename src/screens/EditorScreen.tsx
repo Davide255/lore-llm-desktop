@@ -4,7 +4,7 @@ import { diffLines } from 'diff';
 import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { basename, fileKind, wordCount } from '../kb/paths';
-import { Btn, Hover, Icon, IconBtn, Pill, Segmented, Toggle, VSep } from '../ui/primitives';
+import { Btn, Hover, Icon, IconBtn, Pill, Segmented, Toggle, useCompact, VSep } from '../ui/primitives';
 import { Markdown } from '../ui/Markdown';
 import { useOverlayKeys } from '../ui/overlays';
 import { EmptyState, useFile, useLinkHandler } from './common';
@@ -24,7 +24,10 @@ export function EditorScreen({ path, line: initialLine }: { path: string; line?:
   const [baseline, setBaseline] = useState<string | null>(null);
   const [sel, setSel] = useState<Sel>({ start: 0, end: 0 });
   const [conflict, setConflict] = useState<string | null>(null);
-  const [view, setView] = useState<View3>(app.prefs.editorView ?? 'split');
+  const [chosenView, setView] = useState<View3>(app.prefs.editorView ?? 'split');
+  // A phone has no room for two panes side by side: split becomes the source alone.
+  const compact = useCompact();
+  const view: View3 = compact && chosenView === 'split' ? 'source' : chosenView;
   const syncScroll = app.prefs.syncScroll ?? true;
   const inputRef = useRef<any>(null);
   const undoStack = useRef<Snap[]>([]);
@@ -209,25 +212,25 @@ export function EditorScreen({ path, line: initialLine }: { path: string; line?:
   return (
     <View style={{ flex: 1 }}>
       {/* Bar */}
-      <View style={{ height: 60, flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 28, paddingRight: 20, borderBottomWidth: 1, borderColor: c.hair }}>
+      <View style={{ height: 60, flexDirection: 'row', alignItems: 'center', gap: compact ? 6 : 10, paddingLeft: compact ? 16 : 28, paddingRight: compact ? 10 : 20, borderBottomWidth: 1, borderColor: c.hair }}>
         <Text numberOfLines={1} style={{ fontFamily: font.mono, fontWeight: '500', fontSize: 14, color: c.ink, flexShrink: 1 }}>
           {basename(path)}
         </Text>
-        {dirty ? <Pill label="Non salvato" bg={c.warning14} fg={c.warning} style={{ alignSelf: 'center' }} /> : <Pill label="Salvato" bg={c.success16} fg={c.success} style={{ alignSelf: 'center' }} />}
+        {compact ? null : dirty ? <Pill label="Non salvato" bg={c.warning14} fg={c.warning} style={{ alignSelf: 'center' }} /> : <Pill label="Salvato" bg={c.success16} fg={c.success} style={{ alignSelf: 'center' }} />}
         <View style={{ flex: 1 }} />
         <Segmented
-          width={300}
+          width={compact ? 168 : 300}
           value={view}
           onChange={setViewPersist}
           options={[
             { value: 'preview', label: 'Anteprima' },
-            { value: 'split', label: 'Affiancato' },
+            ...(compact ? [] : [{ value: 'split' as const, label: 'Affiancato' }]),
             { value: 'source', label: 'Sorgente' },
           ]}
         />
         <View style={{ width: 6 }} />
         {app.obsidianReady ? <IconBtn icon="open_in_new" title={dirty ? 'Salva prima di aprire in Obsidian' : 'Apri in Obsidian'} disabled={dirty} onPress={() => app.openInObsidian(path)} /> : null}
-        <Btn variant="plain" label={dirty ? 'Annulla' : 'Chiudi'} onPress={close} />
+        {compact ? <IconBtn icon="close" title={dirty ? 'Annulla' : 'Chiudi'} onPress={close} /> : <Btn variant="plain" label={dirty ? 'Annulla' : 'Chiudi'} onPress={close} />}
         <Btn variant="primary" label="Salva" kbd="⌘S" onPress={save} disabled={!dirty} />
       </View>
 
@@ -260,7 +263,7 @@ export function EditorScreen({ path, line: initialLine }: { path: string; line?:
 
       {/* Toolbar */}
       {view !== 'preview' ? (
-        <View style={{ height: 42, flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 20, borderBottomWidth: 1, borderColor: c.hair }}>
+        <View style={[{ height: 42, flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: compact ? 10 : 20, borderBottomWidth: 1, borderColor: c.hair }, compact && web({ overflowX: 'auto', scrollbarWidth: 'none' })]}>
           <Tool icon="format_bold" title="Grassetto (⌘B)" onPress={() => cmd(wrap('**', '**', 'testo'))} />
           <Tool icon="format_italic" title="Corsivo (⌘I)" onPress={() => cmd(wrap('_', '_', 'testo'))} />
           <Tool icon="format_h1" title="Titolo 1" onPress={() => cmd(linePrefix('# ', /^#{1,6} /))} />
@@ -332,11 +335,11 @@ export function EditorScreen({ path, line: initialLine }: { path: string; line?:
           <ScrollView
             ref={prevScroll}
             style={{ flex: 1 }}
-            contentContainerStyle={view === 'preview' ? { paddingHorizontal: 48 } : { paddingVertical: 24, paddingHorizontal: 44 }}
+            contentContainerStyle={view === 'preview' ? { paddingHorizontal: compact ? 16 : 48 } : { paddingVertical: 24, paddingHorizontal: 44 }}
             onLayout={(e) => (prevMetrics.current.view = e.nativeEvent.layout.height)}
             onContentSizeChange={(_w, h) => (prevMetrics.current.content = h)}
           >
-            <View style={view === 'preview' ? { width: '100%', maxWidth: 680, alignSelf: 'center', paddingVertical: 40 } : null}>
+            <View style={view === 'preview' ? { width: '100%', maxWidth: 680, alignSelf: 'center', paddingVertical: compact ? 20 : 40 } : null}>
               {text.trim() ? (
                 <Markdown source={text} compact={view === 'split'} activeLine={view === 'split' ? caretLine : undefined} {...links} />
               ) : (

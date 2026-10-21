@@ -5,24 +5,26 @@ import { useApp } from '../state/app';
 import { openItemMenu } from '../state/actions';
 import { allFiles, countFiles, projectIcon, projects, relTime } from '../kb/paths';
 import type { FileNode, FolderNode } from '../kb/types';
-import { Btn, eventPoint, Hover, Icon, IconWell, Progress, SectionLabel } from '../ui/primitives';
+import { Btn, eventPoint, Hover, Icon, IconWell, Progress, SectionLabel, useCompact } from '../ui/primitives';
 import { FileTable } from '../ui/FileTable';
-import { EmptyState, useWidth } from './common';
+import { EmptyState, usePad, useWidth } from './common';
 
 export function ProjectsScreen() {
   const app = useApp();
   const [sort, setSort] = useState<'recent' | 'name'>('recent');
   const { width, onLayout } = useWidth();
+  const compact = useCompact();
+  const pad = usePad();
   const list = projects(app.tree).slice();
   if (sort === 'recent') list.sort((a, b) => b.mtime - a.mtime);
   const files = allFiles(app.tree) as FileNode[];
   const recent = files.slice().sort((a, b) => b.mtime - a.mtime).slice(0, 6);
-  const cols = width > 900 ? 3 : 2;
+  const cols = compact ? 1 : width > 900 ? 3 : 2;
   const gap = 16;
   const cardW = (width - gap * (cols - 1)) / cols;
 
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 40, paddingHorizontal: 44, gap: 32 }}>
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: compact ? 24 : 40, paddingHorizontal: pad, gap: compact ? 24 : 32 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 10 }}>
         <View style={{ flex: 1 }}>
           <Text style={t(700, 30, 1.15, { letterSpacing: -1.05 })}>Progetti</Text>
@@ -30,8 +32,8 @@ export function ProjectsScreen() {
             {list.length} {list.length === 1 ? 'progetto' : 'progetti'} · {files.length} file
           </Text>
         </View>
-        <Btn icon="sort" label={sort === 'recent' ? 'Recenti' : 'Nome'} onPress={() => setSort(sort === 'recent' ? 'name' : 'recent')} />
-        <Btn variant="primary" icon="add" label="Nuovo progetto" onPress={() => app.openDialog({ kind: 'newProject' })} />
+        <Btn icon="sort" label={compact ? undefined : sort === 'recent' ? 'Recenti' : 'Nome'} onPress={() => setSort(sort === 'recent' ? 'name' : 'recent')} />
+        <Btn variant="primary" icon="add" label={compact ? 'Nuovo' : 'Nuovo progetto'} onPress={() => app.openDialog({ kind: 'newProject' })} />
       </View>
 
       {app.obsidian.installed && app.vault && !app.vault.enabled && !app.prefs.obsidianBannerDismissed ? (

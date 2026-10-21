@@ -17,7 +17,7 @@ import { SettingsScreen } from './screens/SettingsScreen';
 import { DialogHost } from './dialogs/Dialogs';
 import { SearchPalette } from './dialogs/SearchPalette';
 import { PopupMenuLayer, ToastLayer } from './ui/overlays';
-import { Btn, Hover } from './ui/primitives';
+import { Btn, Hover, useCompact } from './ui/primitives';
 import loreIcon from './assets/lore-icon.png';
 
 export default function App() {
@@ -30,12 +30,14 @@ export default function App() {
 
 function Shell() {
   const app = useApp();
+  const compact = useCompact();
   useGlobalShortcuts();
 
   if (!app.ready) return <View style={{ flex: 1, backgroundColor: c.window }} />;
 
   return (
-    <View style={[{ flex: 1, backgroundColor: c.window }, web({ height: '100vh', overflow: 'hidden' })]}>
+    // dvh: on phones the browser's toolbars come and go, and 100vh would hide the bottom under them.
+    <View style={[{ flex: 1, backgroundColor: c.window }, web({ height: '100dvh', overflow: 'hidden' })]}>
       <TitleBar />
       <View style={{ flex: 1, flexDirection: 'row', minHeight: 0 }}>
         {!app.user ? (
@@ -44,10 +46,11 @@ function Shell() {
           <Loading />
         ) : (
           <>
-            {!app.prefs.sidebarCollapsed ? <Sidebar /> : null}
+            {!compact && !app.prefs.sidebarCollapsed ? <Sidebar /> : null}
             <View style={{ flex: 1, minWidth: 0, position: 'relative' }}>
               <Main />
             </View>
+            {compact && app.drawerOpen ? <Drawer /> : null}
           </>
         )}
       </View>
@@ -55,6 +58,17 @@ function Shell() {
       {app.searchOpen ? <SearchPalette /> : null}
       <PopupMenuLayer />
       <ToastLayer />
+    </View>
+  );
+}
+
+/** Phone layout: the sidebar slides in over the content; a tap outside or any navigation closes it. */
+function Drawer() {
+  const app = useApp();
+  return (
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 40, flexDirection: 'row' }}>
+      <Sidebar style={[{ width: 290, maxWidth: '86%' }, web({ boxShadow: '0 0 40px rgba(0,0,0,.5)', animation: 'lore-drawer .16s ease-out' })]} />
+      <Hover onPress={() => app.setDrawerOpen(false)} accessibilityLabel="Chiudi menu" style={[{ flex: 1, backgroundColor: 'rgba(0,0,0,.45)' }, web({ cursor: 'default' })]} />
     </View>
   );
 }

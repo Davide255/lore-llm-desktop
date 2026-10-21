@@ -4,9 +4,9 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { addItem, addSection, deleteItem, parseChecklist, setItemText, toggleItem, type Checklist, type ChecklistItem } from '../kb/checklist';
 import { relTime } from '../kb/paths';
-import { Btn, Hover, Icon, Progress } from '../ui/primitives';
+import { Btn, Hover, Icon, Progress, useCompact } from '../ui/primitives';
 import { InlineMarkdown } from '../ui/Markdown';
-import { EmptyState, FileBar, Rail, RailHeading, useFile, useLinkHandler, useWidth, type LinkProps } from './common';
+import { EmptyState, FileBar, Rail, RailHeading, useFile, useLinkHandler, usePad, useWidth, type LinkProps } from './common';
 
 type Draft = { kind: 'add'; section: number; parent?: ChecklistItem } | { kind: 'edit'; item: ChecklistItem } | { kind: 'section' };
 
@@ -18,6 +18,8 @@ export function ChecklistScreen({ path }: { path: string }) {
   const latest = useRef<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const { width, onLayout } = useWidth();
+  const compact = useCompact();
+  const pad = usePad();
 
   useEffect(() => {
     if (file) {
@@ -57,12 +59,12 @@ export function ChecklistScreen({ path }: { path: string }) {
   // Parent of an in-progress sub-item, re-resolved so its range tracks new children.
   const liveParent =
     draft?.kind === 'add' && draft.parent ? list.sections[draft.section]?.items.find((i) => i.line === draft.parent!.line) : undefined;
-  const showRail = width > 980;
+  const showRail = !compact && width > 980;
 
   return (
     <View style={{ flex: 1 }} onLayout={onLayout}>
       <FileBar title="checklist.md" subtitle={`${list.done} di ${list.total} completate · ${relTime(file.mtime)}`}>
-        {list.total ? (
+        {list.total && !compact ? (
           <View style={{ width: 160, flexDirection: 'row', marginRight: 6 }}>
             <Progress value={pct} height={5} />
           </View>
@@ -71,8 +73,8 @@ export function ChecklistScreen({ path }: { path: string }) {
       </FileBar>
 
       <View style={{ flex: 1, flexDirection: 'row', minHeight: 0 }}>
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 48 }}>
-          <View style={{ width: '100%', maxWidth: 680, alignSelf: 'center', paddingTop: 40, paddingBottom: 80 }}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: compact ? pad : 48 }}>
+          <View style={{ width: '100%', maxWidth: 680, alignSelf: 'center', paddingTop: compact ? 20 : 40, paddingBottom: 80 }}>
             {list.sections.map((sec, si) => (
               <View key={`${si}-${sec.line}`} style={{ marginBottom: 8 }}>
                 {sec.title != null ? (

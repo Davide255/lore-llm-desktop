@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { c, font, t, web } from '../theme';
 import { useApp, type Route } from '../state/app';
 import { isWeb } from '../kb/bridge';
-import { Hover, Icon, isMac } from '../ui/primitives';
+import { Hover, Icon, isMac, useCompact } from '../ui/primitives';
 
 const SETTINGS_LABEL = { account: 'Account', general: 'Generale', editor: 'Editor', obsidian: 'Obsidian', agents: 'Agenti', shortcuts: 'Scorciatoie' } as const;
 
@@ -31,9 +31,11 @@ function crumbs(route: Route): { label: string; mono?: boolean; to?: Route }[] {
 
 export function TitleBar() {
   const app = useApp();
+  const compact = useCompact();
   // Before login there is no knowledge base: no sidebar toggle, breadcrumbs or sync state.
   const inside = !!app.user && app.loaded;
-  const list = inside ? crumbs(app.route) : [{ label: 'Lore LLM Desktop' }];
+  // A phone has room for the current place only.
+  const list = inside ? crumbs(app.route).slice(compact ? -1 : 0) : [{ label: 'Lore LLM Desktop' }];
   const source = app.changedSource === 'obsidian' ? 'da Obsidian' : app.changedSource === 'device' ? 'da un altro dispositivo' : 'da un agente';
   let sync: { icon: string; label: string; color: string } = {
     synced: { icon: 'cloud_done', label: 'Sincronizzato', color: c.ink3 },
@@ -60,11 +62,11 @@ export function TitleBar() {
       {inside ? (
         <>
           <Hover
-            onPress={() => app.setPrefs({ sidebarCollapsed: !app.prefs.sidebarCollapsed })}
+            onPress={() => (compact ? app.setDrawerOpen(!app.drawerOpen) : app.setPrefs({ sidebarCollapsed: !app.prefs.sidebarCollapsed }))}
             style={({ hovered }) => [{ padding: 4, borderRadius: 6, backgroundColor: hovered ? c.fill07 : 'transparent' }, web({ WebkitAppRegion: 'no-drag' })]}
             accessibilityLabel="Mostra/nascondi sidebar"
           >
-            <Icon name="side_navigation" size={18} color={c.ink3} />
+            <Icon name={compact ? 'menu' : 'side_navigation'} size={compact ? 21 : 18} color={c.ink3} />
           </Hover>
           <View style={{ width: 4 }} />
         </>
@@ -96,7 +98,7 @@ export function TitleBar() {
           style={[{ flexDirection: 'row', alignItems: 'center', gap: 8 }, web({ WebkitAppRegion: 'no-drag', cursor: vaultTrouble ? 'pointer' : 'default' })]}
         >
           <Icon name={sync.icon} size={17} color={sync.color} />
-          <Text style={t(400, 12, 1, { color: sync.color })}>{sync.label}</Text>
+          {compact ? null : <Text style={t(400, 12, 1, { color: sync.color })}>{sync.label}</Text>}
         </Hover>
       ) : null}
     </View>

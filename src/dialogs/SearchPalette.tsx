@@ -5,13 +5,14 @@ import { useApp } from '../state/app';
 import { lore } from '../kb/bridge';
 import { allFiles, basename, fileKind, projectOf, relTime } from '../kb/paths';
 import type { FileNode, SearchResult } from '../kb/types';
-import { FilterPill, Hover, Icon, Kbd } from '../ui/primitives';
+import { FilterPill, Hover, Icon, isTouch, Kbd, useCompact } from '../ui/primitives';
 import { DialogFrame } from '../ui/overlays';
 
 type Item = { path: string; line?: number; snippet?: string; col?: number; extra?: number; recent?: number };
 
 export function SearchPalette() {
   const app = useApp();
+  const compact = useCompact();
   const [q, setQ] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [project, setProject] = useState<string | null>(null);
@@ -116,8 +117,8 @@ export function SearchPalette() {
         </View>
       ) : null}
 
-      <View style={{ flexDirection: 'row', height: 360 }}>
-        <ScrollView ref={listRef} style={{ width: 400, flexGrow: 0, borderRightWidth: 1, borderColor: c.hair }} contentContainerStyle={{ padding: 8, gap: 2 }}>
+      <View style={{ flexDirection: 'row', height: compact ? 420 : 360, maxHeight: compact ? ('60vh' as unknown as number) : undefined }}>
+        <ScrollView ref={listRef} style={compact ? { flex: 1 } : { width: 400, flexGrow: 0, borderRightWidth: 1, borderColor: c.hair }} contentContainerStyle={{ padding: 8, gap: 2 }}>
           <Text style={t(400, 11.5, 1, { color: c.ink3, paddingVertical: 8, paddingHorizontal: 10 })}>
             {needle ? (items.length ? `${totalHits} risultati in ${results.length} file` : 'Nessun risultato') : 'Aperti di recente'}
           </Text>
@@ -153,12 +154,14 @@ export function SearchPalette() {
           })}
         </ScrollView>
 
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 20, paddingHorizontal: 26 }}>
-          {cur && preview != null ? <Preview path={cur.path} content={preview} line={cur.line} needle={needle} /> : null}
-        </ScrollView>
+        {compact ? null : (
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 20, paddingHorizontal: 26 }}>
+            {cur && preview != null ? <Preview path={cur.path} content={preview} line={cur.line} needle={needle} /> : null}
+          </ScrollView>
+        )}
       </View>
 
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18, paddingVertical: 11, paddingHorizontal: 20, borderTopWidth: 1, borderColor: c.hair }}>
+      <View style={[{ flexDirection: 'row', alignItems: 'center', gap: 18, paddingVertical: 11, paddingHorizontal: 20, borderTopWidth: 1, borderColor: c.hair }, isTouch && { display: 'none' }]}>
         <Hint k="↑↓" label="naviga" />
         <Hint k="⏎" label="apri" />
         <Hint k="⌘⏎" label="modifica" />

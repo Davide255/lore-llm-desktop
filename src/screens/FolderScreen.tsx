@@ -5,16 +5,18 @@ import { useApp } from '../state/app';
 import { openItemMenu } from '../state/actions';
 import { countFiles, fileKind, findNode, relTime } from '../kb/paths';
 import type { FileNode, FolderNode } from '../kb/types';
-import { Btn, eventPoint, Hover, Icon, IconBtn, IconWell, Progress } from '../ui/primitives';
+import { Btn, eventPoint, Hover, Icon, IconBtn, IconWell, Progress, useCompact } from '../ui/primitives';
 import { FileTable } from '../ui/FileTable';
 import { anchorBelow } from '../ui/overlays';
-import { EmptyState } from './common';
+import { EmptyState, usePad } from './common';
 
 export function FolderScreen({ path }: { path: string }) {
   const app = useApp();
   const node = findNode(app.tree, path);
   const newRef = useRef<View>(null);
   const moreRef = useRef<View>(null);
+  const compact = useCompact();
+  const pad = usePad();
 
   if (!node || node.kind !== 'folder') {
     return <EmptyState icon="folder_off" title="Cartella non trovata" body={`${path} non esiste più.`} action={{ label: 'Torna ai progetti', onPress: () => app.navigate({ name: 'projects' }) }} />;
@@ -43,7 +45,7 @@ export function FolderScreen({ path }: { path: string }) {
   };
 
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 34, paddingHorizontal: 44, gap: 24 }}>
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: compact ? 24 : 34, paddingHorizontal: pad, gap: 24 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 10 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text numberOfLines={1} style={t(700, 28, 1.15, { letterSpacing: -0.98 })}>
@@ -68,7 +70,7 @@ export function FolderScreen({ path }: { path: string }) {
       </View>
 
       {isProject ? (
-        <View style={{ flexDirection: 'row', gap: 14 }}>
+        <View style={{ flexDirection: compact ? 'column' : 'row', gap: compact ? 10 : 14 }}>
           {index ? (
             <SpecialCard
               node={index}

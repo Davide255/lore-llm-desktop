@@ -6,7 +6,7 @@ import { basename, dirname, filePaths, findNode, join, withMd } from '../kb/path
 import { isAttachment, parseWikiLink, resolveHref, resolveWikiTarget } from '../kb/links';
 import { useApp } from '../state/app';
 import { c, font, t } from '../theme';
-import { Btn, Icon } from '../ui/primitives';
+import { Btn, Icon, useCompact } from '../ui/primitives';
 
 /** Loads a file and re-reads it when it changes on disk. */
 export function useFile(path: string) {
@@ -174,6 +174,9 @@ function findByName(tree: ReturnType<typeof useApp>['tree'], name: string, proje
   return proj && proj.kind === 'folder' ? walk(proj.children) : null;
 }
 
+/** Side padding of a screen's scrolling content: wide on desktop, a phone's usual margin otherwise. */
+export const usePad = () => (useCompact() ? 16 : 44);
+
 /** Tracks a view's width so layouts can drop the rail on narrow windows. */
 export function useWidth(initial = 1000) {
   const [w, setW] = useState(initial);
@@ -182,13 +185,18 @@ export function useWidth(initial = 1000) {
 }
 
 export function FileBar({ title, subtitle, children, pill }: { title: string; subtitle?: string; children?: React.ReactNode; pill?: React.ReactNode }) {
+  const compact = useCompact();
   return (
-    <View style={{ height: 60, flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 28, paddingRight: 20, borderBottomWidth: 1, borderColor: c.hair }}>
+    <View style={{ height: 60, flexDirection: 'row', alignItems: 'center', gap: compact ? 4 : 8, paddingLeft: compact ? 16 : 28, paddingRight: compact ? 10 : 20, borderBottomWidth: 1, borderColor: c.hair }}>
       <View style={{ flex: 1, minWidth: 0, flexDirection: pill ? 'row' : 'column', alignItems: pill ? 'center' : undefined, gap: pill ? 10 : 0 }}>
         <Text numberOfLines={1} style={{ fontFamily: font.mono, fontWeight: '500', fontSize: 14, lineHeight: 17, color: c.ink }}>
           {title}
         </Text>
-        {subtitle ? <Text style={t(400, 11.5, 1.3, { color: c.ink3, marginTop: 3 })}>{subtitle}</Text> : null}
+        {subtitle ? (
+          <Text numberOfLines={1} style={t(400, 11.5, 1.3, { color: c.ink3, marginTop: 3 })}>
+            {subtitle}
+          </Text>
+        ) : null}
         {pill}
       </View>
       {children}

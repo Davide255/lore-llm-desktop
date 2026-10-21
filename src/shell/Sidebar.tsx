@@ -1,5 +1,5 @@
 import React from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { ScrollView, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { editNode, openItemMenu, openRoute } from '../state/actions';
@@ -8,7 +8,7 @@ import type { TreeNode } from '../kb/types';
 import { Avatar, eventPoint, Hover, Icon, Kbd, Pill } from '../ui/primitives';
 import { AgentAvatar } from '../ui/identity';
 
-export function Sidebar() {
+export function Sidebar({ style }: { style?: StyleProp<ViewStyle> }) {
   const app = useApp();
   const { route } = app;
   const projs = projects(app.tree);
@@ -16,7 +16,7 @@ export function Sidebar() {
   const onProjects = route.name === 'projects' || route.name === 'folder' || route.name === 'file';
 
   return (
-    <View style={{ width: 252, backgroundColor: c.sidebar, borderRightWidth: 1, borderColor: c.hair, paddingVertical: 12, paddingHorizontal: 10 }}>
+    <View style={[{ width: 252, backgroundColor: c.sidebar, borderRightWidth: 1, borderColor: c.hair, paddingVertical: 12, paddingHorizontal: 10 }, style]}>
       <Hover
         onPress={() => app.setSearchOpen(true)}
         style={({ hovered }) => ({ flexDirection: 'row', alignItems: 'center', gap: 8, height: 34, paddingLeft: 10, paddingRight: 8, borderRadius: radius.md, backgroundColor: hovered ? c.fill08 : c.fill06 })}

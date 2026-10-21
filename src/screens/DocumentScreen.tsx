@@ -7,10 +7,10 @@ import { lore } from '../kb/bridge';
 import { basename, fileKind, filePaths, formatSize, longDate, relTime, wordCount } from '../kb/paths';
 import { backlinks as linksTo, sameHeading } from '../kb/links';
 import { AuthorAvatar, authorName } from '../ui/identity';
-import { Btn, Hover, Icon, IconBtn, InfoStrip, Kbd } from '../ui/primitives';
+import { Btn, Hover, Icon, IconBtn, InfoStrip, Kbd, useCompact } from '../ui/primitives';
 import { Markdown, extractHeadings } from '../ui/Markdown';
 import { anchorBelow } from '../ui/overlays';
-import { EmptyState, FileBar, Rail, RailHeading, useFile, useLinkHandler, useWidth } from './common';
+import { EmptyState, FileBar, Rail, RailHeading, useFile, useLinkHandler, usePad, useWidth } from './common';
 
 export function DocumentScreen({ path }: { path: string }) {
   const app = useApp();
@@ -18,7 +18,9 @@ export function DocumentScreen({ path }: { path: string }) {
   const links = useLinkHandler(path);
   const readOnly = fileKind(path) === 'index';
   const { width, onLayout } = useWidth();
-  const showRail = width > 980;
+  const compact = useCompact();
+  const showRail = !compact && width > 980;
+  const pad = usePad();
   const scrollRef = useRef<ScrollView>(null);
   const headingY = useRef(new Map<number, number>());
   const [activeHeading, setActiveHeading] = useState(0);
@@ -68,7 +70,7 @@ export function DocumentScreen({ path }: { path: string }) {
   const subtitle = readOnly ? 'Generato · sola lettura' : `${formatSize(file.size)} · modificato ${relTime(file.mtime)} ${author}`;
 
   // Heading offsets are relative to the markdown root; add its own offset + padding.
-  const padTop = readOnly ? 28 : 40;
+  const padTop = compact ? 20 : readOnly ? 28 : 40;
   const yOf = (line: number) => {
     const y = headingY.current.get(line);
     return y == null ? null : y + (headingY.current.get(-1) ?? 0) + padTop;
@@ -95,7 +97,7 @@ export function DocumentScreen({ path }: { path: string }) {
         {app.obsidianReady ? <IconBtn icon="open_in_new" title="Apri in Obsidian" onPress={() => app.openInObsidian(path)} /> : null}
         <IconBtn icon="ios_share" title="Copia link" onPress={() => app.ops.copyLink(path)} />
         {readOnly ? (
-          <Btn icon="lock" label="Sola lettura" textColor={c.ink3} disabled style={{ opacity: 1 }} />
+          compact ? null : <Btn icon="lock" label="Sola lettura" textColor={c.ink3} disabled style={{ opacity: 1 }} />
         ) : (
           <>
             <View ref={moreRef}>
@@ -113,8 +115,8 @@ export function DocumentScreen({ path }: { path: string }) {
       </FileBar>
 
       <View style={{ flex: 1, flexDirection: 'row', minHeight: 0 }}>
-        <ScrollView ref={scrollRef} style={{ flex: 1 }} onScroll={onScroll} scrollEventThrottle={32} contentContainerStyle={{ paddingHorizontal: 48 }}>
-          <View style={{ width: '100%', maxWidth: 680, alignSelf: 'center', paddingTop: readOnly ? 28 : 40, paddingBottom: 60 }}>
+        <ScrollView ref={scrollRef} style={{ flex: 1 }} onScroll={onScroll} scrollEventThrottle={32} contentContainerStyle={{ paddingHorizontal: compact ? pad : 48 }}>
+          <View style={{ width: '100%', maxWidth: 680, alignSelf: 'center', paddingTop: padTop, paddingBottom: 60 }}>
             {readOnly ? (
               <InfoStrip icon="lock" style={{ marginBottom: 28, paddingVertical: 12, paddingHorizontal: 16 }}>
                 <Text style={t(400, 13, 1.45, { color: c.ink2 })}>Indice compilato dagli agenti. Non modificabile — cambia i file sorgente e verrà rigenerato.</Text>

@@ -74,6 +74,9 @@ interface AppCtx {
   openDialog: (d: Dialog | null) => void;
   searchOpen: boolean;
   setSearchOpen: (v: boolean) => void;
+  /** Phone layout: the sidebar slid in over the content. */
+  drawerOpen: boolean;
+  setDrawerOpen: (v: boolean) => void;
   menu: PopupMenu | null;
   setMenu: (m: PopupMenu | null) => void;
   toasts: Toast[];
@@ -144,6 +147,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [dialog, openDialog] = useState<Dialog | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [menu, setMenu] = useState<PopupMenu | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
@@ -279,6 +283,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return r;
         });
         setMenu(null);
+        setDrawerOpen(false);
         if (r.name === 'file' || r.name === 'folder') {
           setSelected(r.path);
           // Reveal the target in the sidebar tree.
@@ -598,6 +603,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     openDialog,
     searchOpen,
     setSearchOpen,
+    drawerOpen,
+    setDrawerOpen,
     menu,
     setMenu,
     toasts,

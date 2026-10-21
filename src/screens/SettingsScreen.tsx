@@ -7,7 +7,7 @@ import { isWeb, lore } from '../kb/bridge';
 import type { Agent, AgentKind, NewAgent, Permission, VaultStatus } from '../kb/types';
 import { AGENT_KIND_LIST, AGENT_KINDS } from '../kb/agents';
 import { AgentAvatar } from '../ui/identity';
-import { Avatar, Btn, Card, Field, FieldLabel, Hover, Icon, IconWell, Kbd, Segmented, Toggle } from '../ui/primitives';
+import { Avatar, Btn, Card, Field, FieldLabel, Hover, Icon, IconWell, isTouch, Kbd, Segmented, Toggle, useCompact } from '../ui/primitives';
 import { DialogFooter, DialogFrame, DialogTitle, anchorBelow } from '../ui/overlays';
 
 const SECTIONS = ([
@@ -18,16 +18,25 @@ const SECTIONS = ([
   { key: 'agents', icon: 'smart_toy', label: 'Agenti' },
   { key: 'shortcuts', icon: 'keyboard', label: 'Scorciatoie' },
 ] as { key: SettingsSection; icon: string; label: string }[])
-  // A browser has no folder to keep in sync for Obsidian.
-  .filter((s) => !(isWeb && s.key === 'obsidian'));
+  // A browser has no folder to keep in sync for Obsidian; a touch screen has no keyboard shortcuts.
+  .filter((s) => !(isWeb && s.key === 'obsidian') && !(isTouch && s.key === 'shortcuts'));
 
 export function SettingsScreen({ section: asked = 'general' }: { section?: SettingsSection }) {
   const app = useApp();
+  const compact = useCompact();
   const section = isWeb && asked === 'obsidian' ? 'general' : asked;
   return (
-    <View style={{ flex: 1, flexDirection: 'row' }}>
-      <View style={{ width: 210, borderRightWidth: 1, borderColor: c.hair, paddingVertical: 24, paddingHorizontal: 12, gap: 2 }}>
-        <Text style={t(700, 20, 1, { letterSpacing: -0.5, paddingHorizontal: 10, paddingBottom: 18 })}>Impostazioni</Text>
+    <View style={{ flex: 1, flexDirection: compact ? 'column' : 'row' }}>
+      {/* A phone shows the sections as a scrolling strip of tabs above the page. */}
+      <View
+        style={[
+          compact
+            ? { flexDirection: 'row', gap: 2, paddingVertical: 8, paddingHorizontal: 10, borderBottomWidth: 1, borderColor: c.hair }
+            : { width: 210, borderRightWidth: 1, borderColor: c.hair, paddingVertical: 24, paddingHorizontal: 12, gap: 2 },
+          compact && web({ overflowX: 'auto', scrollbarWidth: 'none', flexShrink: 0 }),
+        ]}
+      >
+        {compact ? null : <Text style={t(700, 20, 1, { letterSpacing: -0.5, paddingHorizontal: 10, paddingBottom: 18 })}>Impostazioni</Text>}
         {SECTIONS.map((s) => {
           const on = s.key === section;
           return (
@@ -42,7 +51,7 @@ export function SettingsScreen({ section: asked = 'general' }: { section?: Setti
           );
         })}
       </View>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 34, paddingHorizontal: 44, gap: 22, maxWidth: 1000 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: compact ? 22 : 34, paddingHorizontal: compact ? 16 : 44, gap: 22, maxWidth: 1000 }}>
         {section === 'account' ? <Account /> : section === 'general' ? <General /> : section === 'editor' ? <EditorPrefs /> : section === 'obsidian' ? <ObsidianPrefs /> : section === 'agents' ? <Agents /> : <Shortcuts />}
       </ScrollView>
     </View>
@@ -50,9 +59,10 @@ export function SettingsScreen({ section: asked = 'general' }: { section?: Setti
 }
 
 function Header({ title, body, action }: { title: string; body: string; action?: React.ReactNode }) {
+  const compact = useCompact();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
-      <View style={{ flex: 1 }}>
+    <View style={compact ? { gap: 14, alignItems: 'flex-start' } : { flexDirection: 'row', alignItems: 'flex-end' }}>
+      <View style={compact ? null : { flex: 1 }}>
         <Text style={t(700, 24, 1.2, { letterSpacing: -0.72 })}>{title}</Text>
         <Text style={t(400, 13.5, 1.5, { color: c.ink3, marginTop: 6 })}>{body}</Text>
       </View>
@@ -366,20 +376,21 @@ function Agents() {
   const update = (id: string, patch: Partial<Pick<Agent, 'permission' | 'scope'>>) => app.updateAgent(id, patch);
   const names = projects(app.tree).map((p) => p.name);
   const lastWrite = (id: string) => app.audit.find((i) => i.agent?.id === id)?.at;
+  const compact = useCompact();
 
   return (
     <>
       <Header title="Agenti" body="L’unico posto dove si decide chi può scrivere nella base." action={<Btn variant="primary" icon="add" label="Collega un agente" onPress={() => setAdding(true)} />} />
       <View style={{ borderWidth: 1, borderColor: c.hair, borderRadius: radius.card, overflow: 'hidden' }}>
-        <View style={[rowStyle, { height: 38, borderTopWidth: 0 }]}>
+        <View style={[rowStyle, { height: 38, borderTopWidth: 0 }, compact && { display: 'none' }]}>
           <Text style={[head, { flex: 1 }]}>Agente</Text>
           <Text style={[head, { width: 170 }]}>Permessi</Text>
           <Text style={[head, { width: 160 }]}>Progetti</Text>
           <Text style={[head, { width: 140 }]}>Ultima scrittura</Text>
           <View style={{ width: 24 }} />
         </View>
-        {app.agents.map((a) => (
-          <View key={a.id} style={[rowStyle, { height: 58 }]}>
+        {app.agents.map((a) => {
+          const name = (
             <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 0 }}>
               <AgentAvatar agent={a} size={30} />
               <View style={{ flexShrink: 1, minWidth: 0 }}>
@@ -393,33 +404,34 @@ function Agents() {
                 ) : null}
               </View>
             </View>
-            <View style={{ width: 170 }}>
-              <Select
-                label={a.permission === 'write' ? 'Lettura e scrittura' : 'Sola lettura'}
-                options={[
-                  { label: 'Lettura e scrittura', checked: a.permission === 'write', onPress: () => update(a.id, { permission: 'write' }) },
-                  { label: 'Sola lettura', checked: a.permission === 'read', onPress: () => update(a.id, { permission: 'read' }) },
-                ]}
-              />
-            </View>
-            <View style={{ width: 160 }}>
-              <Select
-                label={a.scope.includes('*') ? 'Tutti' : a.scope.length === 1 ? a.scope[0] : `${a.scope.length} progetti`}
-                options={[
-                  { label: 'Tutti', checked: a.scope.includes('*'), onPress: () => update(a.id, { scope: ['*'] }) },
-                  ...names.map((n) => ({
-                    label: n,
-                    checked: !a.scope.includes('*') && a.scope.includes(n),
-                    onPress: () => {
-                      const cur = a.scope.includes('*') ? [] : a.scope;
-                      const next = cur.includes(n) ? cur.filter((x) => x !== n) : [...cur, n];
-                      update(a.id, { scope: next.length ? next : ['*'] });
-                    },
-                  })),
-                ]}
-              />
-            </View>
-            <Text style={[t(400, 13.5, 1, { color: c.ink3 }), { width: 140 }]}>{lastWrite(a.id) ? relTime(lastWrite(a.id)!) : '—'}</Text>
+          );
+          const permission = (
+            <Select
+              label={a.permission === 'write' ? 'Lettura e scrittura' : 'Sola lettura'}
+              options={[
+                { label: 'Lettura e scrittura', checked: a.permission === 'write', onPress: () => update(a.id, { permission: 'write' }) },
+                { label: 'Sola lettura', checked: a.permission === 'read', onPress: () => update(a.id, { permission: 'read' }) },
+              ]}
+            />
+          );
+          const scope = (
+            <Select
+              label={a.scope.includes('*') ? 'Tutti' : a.scope.length === 1 ? a.scope[0] : `${a.scope.length} progetti`}
+              options={[
+                { label: 'Tutti', checked: a.scope.includes('*'), onPress: () => update(a.id, { scope: ['*'] }) },
+                ...names.map((n) => ({
+                  label: n,
+                  checked: !a.scope.includes('*') && a.scope.includes(n),
+                  onPress: () => {
+                    const cur = a.scope.includes('*') ? [] : a.scope;
+                    const next = cur.includes(n) ? cur.filter((x) => x !== n) : [...cur, n];
+                    update(a.id, { scope: next.length ? next : ['*'] });
+                  },
+                })),
+              ]}
+            />
+          );
+          const revoke = (
             <Hover
               onPress={() => setRevoking(a)}
               accessibilityLabel="Revoca"
@@ -427,8 +439,29 @@ function Agents() {
             >
               <Icon name="close" size={15} color={c.ink3} />
             </Hover>
-          </View>
-        ))}
+          );
+          // A phone stacks the two pickers under the name instead of in columns.
+          return compact ? (
+            <View key={a.id} style={[rowStyle, { flexDirection: 'column', alignItems: 'stretch', paddingVertical: 12, paddingHorizontal: 14, gap: 10 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                {name}
+                {revoke}
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <View style={{ flex: 1 }}>{permission}</View>
+                <View style={{ flex: 1 }}>{scope}</View>
+              </View>
+            </View>
+          ) : (
+            <View key={a.id} style={[rowStyle, { height: 58 }]}>
+              {name}
+              <View style={{ width: 170 }}>{permission}</View>
+              <View style={{ width: 160 }}>{scope}</View>
+              <Text style={[t(400, 13.5, 1, { color: c.ink3 }), { width: 140 }]}>{lastWrite(a.id) ? relTime(lastWrite(a.id)!) : '—'}</Text>
+              {revoke}
+            </View>
+          );
+        })}
         {!app.agents.length ? (
           <View style={{ padding: 24, alignItems: 'center', borderTopWidth: 1, borderColor: c.hair }}>
             <Text style={t(400, 13, 1.5, { color: c.ink3, textAlign: 'center' })}>Nessun agente registrato. Collega Claude, Codex o qualsiasi client MCP che scrive nella base.</Text>
@@ -497,6 +530,7 @@ const ACTION_LABEL ={ CREATE: 'creato', UPDATE: 'modificato', DELETE: 'eliminato
 /** Server-side audit: every file an agent created, changed or deleted. */
 function AuditLog() {
   const app = useApp();
+  const compact = useCompact();
   return (
     <View style={{ gap: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -505,15 +539,17 @@ function AuditLog() {
       </View>
       <View style={{ borderWidth: 1, borderColor: c.hair, borderRadius: radius.card, overflow: 'hidden' }}>
         {app.audit.map((i, n) => (
-          <View key={i.id} style={[rowStyle, { height: 40, borderTopWidth: n ? 1 : 0 }]}>
-            <Text style={[t(400, 12.5, 1, { color: c.ink3 }), { width: 90 }]}>{relTime(i.at)}</Text>
-            <View style={{ width: 160, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View key={i.id} style={[rowStyle, { height: 40, borderTopWidth: n ? 1 : 0 }, compact && { paddingHorizontal: 14, gap: 10 }]}>
+            <Text numberOfLines={1} style={[t(400, 12.5, 1, { color: c.ink3 }), { width: compact ? 64 : 90 }]}>{relTime(i.at)}</Text>
+            <View style={{ width: compact ? 20 : 160, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <AgentAvatar agent={i.agent} size={20} />
-              <Text numberOfLines={1} style={[t(500, 13, 1), { flexShrink: 1 }]}>
-                {i.agent?.name ?? 'Agente revocato'}
-              </Text>
+              {compact ? null : (
+                <Text numberOfLines={1} style={[t(500, 13, 1), { flexShrink: 1 }]}>
+                  {i.agent?.name ?? 'Agente revocato'}
+                </Text>
+              )}
             </View>
-            <Text style={[t(400, 12.5, 1, { color: i.action === 'DELETE' ? c.error : c.ink2 }), { width: 80 }]}>{ACTION_LABEL[i.action]}</Text>
+            {compact ? null : <Text style={[t(400, 12.5, 1, { color: i.action === 'DELETE' ? c.error : c.ink2 }), { width: 80 }]}>{ACTION_LABEL[i.action]}</Text>}
             <Text numberOfLines={1} style={{ flex: 1, fontFamily: font.mono, fontSize: 12.5, color: c.ink2 }}>
               {i.path}
             </Text>

@@ -271,20 +271,23 @@ function ListView({ list, startLine, depth, ...p }: { list: Tokens.List; startLi
 
 function TableView({ table, ...p }: { table: Tokens.Table } & MarkdownProps) {
   const cell = (tokens: Token[], head: boolean, key: number) => (
-    <View key={key} style={{ flex: 1, paddingVertical: 9, paddingHorizontal: 12, borderLeftWidth: key ? 1 : 0, borderColor: c.hair }}>
+    <View key={key} style={{ flex: 1, minWidth: 110, paddingVertical: 9, paddingHorizontal: 12, borderLeftWidth: key ? 1 : 0, borderColor: c.hair }}>
       <Text style={head ? t(600, 11, 1.3, { letterSpacing: 0.88, textTransform: 'uppercase', color: c.ink3 }) : t(400, 13.5, 1.5, { color: c.ink78 })}>
         <Inline tokens={tokens} {...p} />
       </Text>
     </View>
   );
   return (
-    <View style={{ borderWidth: 1, borderColor: c.hair, borderRadius: radius.card, overflow: 'hidden', marginBottom: 14 }}>
-      <View style={{ flexDirection: 'row', backgroundColor: 'rgba(250,249,245,.02)' }}>{table.header.map((h, i) => cell(h.tokens, true, i))}</View>
-      {table.rows.map((r, ri) => (
-        <View key={ri} style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: c.hair }}>
-          {r.map((x, i) => cell(x.tokens, false, i))}
-        </View>
-      ))}
+    // Columns keep a readable width; on a narrow screen the table scrolls sideways instead of squeezing them.
+    <View style={[{ borderWidth: 1, borderColor: c.hair, borderRadius: radius.card, overflow: 'hidden', marginBottom: 14 }, web({ overflowX: 'auto' })]}>
+      <View style={web({ width: 'max-content', minWidth: '100%' })}>
+        <View style={{ flexDirection: 'row', backgroundColor: 'rgba(250,249,245,.02)' }}>{table.header.map((h, i) => cell(h.tokens, true, i))}</View>
+        {table.rows.map((r, ri) => (
+          <View key={ri} style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: c.hair }}>
+            {r.map((x, i) => cell(x.tokens, false, i))}
+          </View>
+        ))}
+      </View>
     </View>
   );
 }

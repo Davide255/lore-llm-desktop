@@ -5,7 +5,7 @@ import { useApp } from '../state/app';
 import { editNode, openItemMenu, openRoute } from '../state/actions';
 import { countFiles, fileKind, formatSize, projectOf, relTime } from '../kb/paths';
 import type { AgentRef, TreeNode } from '../kb/types';
-import { eventPoint, Hover, Icon } from './primitives';
+import { eventPoint, Hover, Icon, useCompact } from './primitives';
 import { AuthorChip } from './identity';
 
 export type Column = 'size' | 'project' | 'modified' | 'author';
@@ -26,15 +26,20 @@ export function AuthorCell({ author, agent }: { author: 'you' | 'agent'; agent?:
   return <AuthorChip author={author} agent={agent} />;
 }
 
-export function FileTable({ rows, columns, header = true, empty }: { rows: TreeNode[]; columns: Column[]; header?: boolean; empty?: string }) {
+export function FileTable({ rows, columns: wanted, header = true, empty }: { rows: TreeNode[]; columns: Column[]; header?: boolean; empty?: string }) {
   const app = useApp();
+  // A phone keeps the name and when it changed.
+  const compact = useCompact();
+  const columns = compact ? wanted.filter((col) => col === 'modified') : wanted;
+  const width = (col: Column) => (compact ? 84 : WIDTH[col]);
+  const padX = compact ? 14 : 18;
   return (
     <View style={{ borderWidth: 1, borderColor: c.hair, borderRadius: radius.card, overflow: 'hidden' }}>
       {header ? (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, height: 38, paddingHorizontal: 18, backgroundColor: 'rgba(250,249,245,.02)' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, height: 38, paddingHorizontal: padX, backgroundColor: 'rgba(250,249,245,.02)' }}>
           <Text style={[headStyle, { flex: 1 }]}>Nome</Text>
           {columns.map((col) => (
-            <Text key={col} style={[headStyle, { width: WIDTH[col] }]}>
+            <Text key={col} style={[headStyle, { width: width(col) }]}>
               {LABEL[col]}
             </Text>
           ))}
@@ -53,7 +58,7 @@ export function FileTable({ rows, columns, header = true, empty }: { rows: TreeN
               openItemMenu(app, n.path, pt.x, pt.y);
             }}
             style={({ hovered }) => [
-              { flexDirection: 'row', alignItems: 'center', gap: 12, height: 48, paddingHorizontal: 18, borderTopWidth: i === 0 && !header ? 0 : 1, borderColor: c.hair, backgroundColor: ctx ? c.purple14 : hovered ? c.fill04 : 'transparent' },
+              { flexDirection: 'row', alignItems: 'center', gap: 12, height: 48, paddingHorizontal: padX, borderTopWidth: i === 0 && !header ? 0 : 1, borderColor: c.hair, backgroundColor: ctx ? c.purple14 : hovered ? c.fill04 : 'transparent' },
               ctx && web({ boxShadow: 'inset 0 0 0 1px rgba(143,92,255,.5)' }),
             ]}
           >
@@ -65,7 +70,7 @@ export function FileTable({ rows, columns, header = true, empty }: { rows: TreeN
               </Text>
             </View>
             {columns.map((col) => (
-              <View key={col} style={{ width: WIDTH[col] }}>
+              <View key={col} style={{ width: width(col) }}>
                 {col === 'author' ? (
                   n.kind === 'file' ? <AuthorCell author={n.author} agent={n.agent} /> : <Text style={t(400, 13, 1, { color: c.ink3 })}>—</Text>
                 ) : (

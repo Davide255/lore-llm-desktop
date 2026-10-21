@@ -4,7 +4,7 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { basename, findNode, projectOf, relTime } from '../kb/paths';
 import type { ActivityEvent } from '../kb/types';
-import { Btn, FilterPill, Hover, Icon, Pill } from '../ui/primitives';
+import { Btn, FilterPill, Hover, Icon, IconBtn, Pill, useCompact } from '../ui/primitives';
 import { AuthorAvatar } from '../ui/identity';
 import { EmptyState } from './common';
 
@@ -34,7 +34,9 @@ export function ActivityScreen({ id }: { id?: string }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [selectedId, setSelectedId] = useState<string | undefined>(id);
   const list = app.activity.filter((a) => filter === 'all' || a.by === filter);
-  const selected = list.find((a) => a.id === selectedId) ?? list[0];
+  // A phone shows the list or one event, never both: nothing is pre-selected there.
+  const compact = useCompact();
+  const selected = list.find((a) => a.id === selectedId) ?? (compact ? undefined : list[0]);
 
   useEffect(() => {
     app.markSeen();
@@ -53,7 +55,8 @@ export function ActivityScreen({ id }: { id?: string }) {
 
   return (
     <View style={{ flex: 1 }}>
-      <View style={{ height: 60, flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 28, paddingRight: 20, borderBottomWidth: 1, borderColor: c.hair }}>
+      <View style={{ height: 60, flexDirection: 'row', alignItems: 'center', gap: compact ? 6 : 8, paddingLeft: compact ? 16 : 28, paddingRight: compact ? 12 : 20, borderBottomWidth: 1, borderColor: c.hair }}>
+        {compact && selected ? <IconBtn icon="arrow_back" title="Tutte le attività" onPress={() => setSelectedId(undefined)} /> : null}
         <Text style={[t(700, 20, 1, { letterSpacing: -0.5 }), { flex: 1 }]}>Attività</Text>
         <FilterPill label="Tutto" active={filter === 'all'} onPress={() => setFilter('all')} />
         <FilterPill label="Agenti" active={filter === 'agent'} onPress={() => setFilter('agent')} />
@@ -68,7 +71,10 @@ export function ActivityScreen({ id }: { id?: string }) {
         />
       ) : (
         <View style={{ flex: 1, flexDirection: 'row', minHeight: 0 }}>
-          <ScrollView style={{ width: 360, flexGrow: 0, borderRightWidth: 1, borderColor: c.hair }} contentContainerStyle={{ padding: 10, gap: 2 }}>
+          <ScrollView
+            style={[compact ? { flex: 1 } : { width: 360, flexGrow: 0, borderRightWidth: 1, borderColor: c.hair }, compact && selected ? { display: 'none' } : null]}
+            contentContainerStyle={{ padding: 10, gap: 2 }}
+          >
             {groups.map((g) => (
               <View key={g.label} style={{ gap: 2 }}>
                 <Text style={t(600, 10.5, 1, { letterSpacing: 0.84, textTransform: 'uppercase', color: c.ink3, marginTop: 10, marginBottom: 8, marginHorizontal: 10 })}>{g.label}</Text>
@@ -78,7 +84,7 @@ export function ActivityScreen({ id }: { id?: string }) {
               </View>
             ))}
           </ScrollView>
-          {selected ? <EventDetail e={selected} /> : null}
+          {selected ? <EventDetail e={selected} compact={compact} /> : null}
         </View>
       )}
     </View>
@@ -141,7 +147,7 @@ function headingAbove(src: string | null, line: number) {
   return null;
 }
 
-function EventDetail({ e }: { e: ActivityEvent }) {
+function EventDetail({ e, compact }: { e: ActivityEvent; compact: boolean }) {
   const app = useApp();
   const exists = !!findNode(app.tree, e.path);
   const agent = e.by === 'agent';
@@ -167,10 +173,10 @@ function EventDetail({ e }: { e: ActivityEvent }) {
   };
 
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 24, paddingHorizontal: 28, gap: 18 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: compact ? 18 : 24, paddingHorizontal: compact ? 16 : 28, gap: 18 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flexWrap: compact ? 'wrap' : 'nowrap' }}>
         <AuthorAvatar author={e.by} agent={e.agent} size={36} />
-        <View style={{ flex: 1, minWidth: 0 }}>
+        <View style={{ flex: 1, minWidth: compact ? '70%' : 0 }}>
           <Text style={t(600, 16, 1.3, { letterSpacing: -0.24 })}>
             {e.kind === 'conflict' ? 'Modifiche in conflitto' : agent ? `Modifica di ${e.agent?.name ?? 'un agente'}` : via(e) ? `Tua modifica ${via(e)}` : 'Tua modifica'}
           </Text>

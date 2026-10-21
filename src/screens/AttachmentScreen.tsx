@@ -6,7 +6,7 @@ import { openItemMenu } from '../state/actions';
 import { lore } from '../kb/bridge';
 import { backlinks as linksTo, isImage } from '../kb/links';
 import { basename, filePaths, findNode, formatSize, longDate, relTime } from '../kb/paths';
-import { Btn, Hover, Icon, IconBtn } from '../ui/primitives';
+import { Btn, Hover, Icon, IconBtn, useCompact } from '../ui/primitives';
 import { anchorBelow } from '../ui/overlays';
 import { useAssetUrl } from '../ui/Markdown';
 import { EmptyState, FileBar, Rail, RailHeading, useWidth } from './common';
@@ -16,6 +16,7 @@ export function AttachmentScreen({ path }: { path: string }) {
   const app = useApp();
   const node = findNode(app.tree, path);
   const { width, onLayout } = useWidth();
+  const compact = useCompact();
   const [usedBy, setUsedBy] = useState<string[]>([]);
   const [failed, setFailed] = useState(false);
   const src = useAssetUrl(path, () => setFailed(true));
@@ -50,7 +51,7 @@ export function AttachmentScreen({ path }: { path: string }) {
         <Btn variant="tint" icon="open_in_new" label="Apri" onPress={open} />
       </FileBar>
       <View style={{ flex: 1, flexDirection: 'row', minHeight: 0 }}>
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 40, alignItems: 'center' }}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: compact ? 16 : 40, alignItems: 'center' }}>
           {image && !failed ? (
             <img
               src={src}
@@ -59,14 +60,14 @@ export function AttachmentScreen({ path }: { path: string }) {
               style={{ maxWidth: '100%', maxHeight: '75vh', borderRadius: radius.lg, background: c.cell, objectFit: 'contain' }}
             />
           ) : (
-            <Hover onPress={open} style={{ alignItems: 'center', gap: 12, padding: 48, borderRadius: radius.xl, backgroundColor: c.cell }}>
+            <Hover onPress={open} style={{ alignItems: 'center', gap: 12, padding: compact ? 28 : 48, borderRadius: radius.xl, backgroundColor: c.cell }}>
               <Icon name={image ? 'broken_image' : 'picture_as_pdf'} size={48} color={c.blueTint} />
               <Text style={{ fontFamily: font.mono, fontSize: 13, color: c.ink }}>{basename(path)}</Text>
               <Text style={t(400, 12.5, 1.4, { color: c.ink3 })}>{image ? 'Anteprima non disponibile' : 'Apri con l’app predefinita'}</Text>
             </Hover>
           )}
         </ScrollView>
-        {width > 980 ? (
+        {!compact && width > 980 ? (
           <Rail>
             {usedBy.length ? (
               <>

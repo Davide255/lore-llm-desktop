@@ -9,8 +9,14 @@ import {
   type TextInputProps,
   type TextStyle,
   type ViewStyle,
+  useWindowDimensions,
 } from 'react-native';
 import { c, font, radius, shadow, t, web } from '../theme';
+
+/** Phone-sized window: one column, the sidebar becomes a drawer, side panes and rails go. */
+export const useCompact = () => useWindowDimensions().width < 760;
+/** Touch-first device (phone, tablet): no keyboard to advertise shortcuts for. */
+export const isTouch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
 
 export const isMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || navigator.userAgent);
 /** Modifier label: ⌘ on macOS, Ctrl elsewhere. */
@@ -95,6 +101,7 @@ export const Hover = forwardRef<View, Omit<PressableProps, 'style' | 'children'>
 // Kbd
 // ---------------------------------------------------------------------------
 export function Kbd({ children, tone = 'default', style }: { children: string; tone?: 'default' | 'tint' | 'onPrimary'; style?: StyleProp<ViewStyle> }) {
+  if (isTouch) return null;
   const bg = tone === 'tint' ? c.purple20 : tone === 'onPrimary' ? 'rgba(255,255,255,.18)' : c.fill08;
   const fg = tone === 'tint' ? c.purpleTint : tone === 'onPrimary' ? '#fff' : c.ink3;
   return (
