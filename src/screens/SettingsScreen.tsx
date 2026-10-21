@@ -21,8 +21,9 @@ const SECTIONS = ([
   // A browser has no folder to keep in sync for Obsidian.
   .filter((s) => !(isWeb && s.key === 'obsidian'));
 
-export function SettingsScreen({ section = 'general' }: { section?: SettingsSection }) {
+export function SettingsScreen({ section: asked = 'general' }: { section?: SettingsSection }) {
   const app = useApp();
+  const section = isWeb && asked === 'obsidian' ? 'general' : asked;
   return (
     <View style={{ flex: 1, flexDirection: 'row' }}>
       <View style={{ width: 210, borderRightWidth: 1, borderColor: c.hair, paddingVertical: 24, paddingHorizontal: 12, gap: 2 }}>

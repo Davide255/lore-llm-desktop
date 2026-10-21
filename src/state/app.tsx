@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { lore } from '../kb/bridge';
+import { isWeb, lore } from '../kb/bridge';
 import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, NewAgent, ObsidianStatus, Permission, Prefs, SignInProvider, TreeNode, VaultStatus } from '../kb/types';
 import { basename, dirname, fileKind, findNode } from '../kb/paths';
 
@@ -318,7 +318,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (userId) refreshVault().catch(() => {});
+    // The browser build has no local vault to sync with Obsidian.
+    if (userId && !isWeb) refreshVault().catch(() => {});
   }, [userId, refreshVault]);
 
   useEffect(() => {
@@ -350,10 +351,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
   }, [loaded, userId, navigate]);
 
-  const obsidianReady = !!vault?.enabled && vault.state !== 'off' && obsidian.installed;
+  const obsidianReady = !isWeb && !!vault?.enabled && vault.state !== 'off' && obsidian.installed;
 
   const openInObsidian = useCallback(
     async (path?: string) => {
+      if (isWeb) return;
       try {
         if (!obsidian.registered) {
           // Obsidian has no link that adds a vault: the setup explains the one manual step.
