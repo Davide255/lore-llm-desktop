@@ -71,6 +71,7 @@ const VAULT_OFF: VaultStatus = {
   confirm: null,
 };
 const noVault = () => Promise.reject(new Error('La copia locale per Obsidian è disponibile solo nell’app desktop'));
+const noTeams = () => Promise.reject(new Error('I team si gestiscono solo nell’app desktop'));
 
 export function createWebBridge(): LoreBridge {
   const changed = channel<ChangedEvent>();
@@ -512,6 +513,25 @@ export function createWebBridge(): LoreBridge {
         nextBefore: next_before,
       };
     },
+
+    // Teams are managed from the desktop app; the browser sees none.
+    teams: async () => [],
+    team: noTeams,
+    createTeam: noTeams,
+    renameTeam: noTeams,
+    deleteTeam: noTeams,
+    teamMembers: noTeams,
+    setMemberRole: noTeams,
+    removeMember: noTeams,
+    teamInvites: noTeams,
+    inviteToTeam: noTeams,
+    revokeInvite: noTeams,
+    myInvites: async () => [],
+    answerInvite: noTeams,
+    moveToTeam: noTeams,
+    vaultProjects: async () => [],
+    vaultSetProject: noVault,
+    onInvites: none,
 
     // No local vault / Obsidian in a browser.
     vaultStatus: async () => VAULT_OFF,

@@ -4,6 +4,7 @@ import { c, font, radius, t, web } from './theme';
 import { AppProvider, currentDir, useApp } from './state/app';
 import { handleItemShortcut } from './state/actions';
 import { fileKind, projectKeyOf, unloadedProject } from './kb/paths';
+import { canWrite } from './kb/teams';
 import { TitleBar } from './shell/TitleBar';
 import { Sidebar } from './shell/Sidebar';
 import { ProjectsScreen } from './screens/ProjectsScreen';
@@ -89,7 +90,7 @@ function Main() {
     case 'file': {
       const kind = fileKind(route.path);
       if (kind === 'attachment') return <AttachmentScreen key={route.path} path={route.path} />;
-      if (route.edit && kind !== 'index') return <EditorScreen key={`e:${route.path}`} path={route.path} line={route.line} />;
+      if (route.edit && kind !== 'index' && canWrite(app.accessOf(route.path))) return <EditorScreen key={`e:${route.path}`} path={route.path} line={route.line} />;
       if (kind === 'checklist') return <ChecklistScreen key={route.path} path={route.path} />;
       return <DocumentScreen key={route.path} path={route.path} />;
     }
@@ -184,6 +185,7 @@ function useGlobalShortcuts() {
       if (mod && key === 'n') {
         e.preventDefault();
         const dir = currentDir(a.route);
+        if (dir && !canWrite(a.accessOf(dir))) return;
         if (e.shiftKey) a.openDialog({ kind: 'newFolder', dir });
         else a.openDialog({ kind: 'newFile', dir });
         return;

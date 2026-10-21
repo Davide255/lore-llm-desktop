@@ -4,6 +4,7 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { addItem, addSection, deleteItem, parseChecklist, setItemText, toggleItem, type Checklist, type ChecklistItem } from '../kb/checklist';
 import { relTime } from '../kb/paths';
+import { canWrite } from '../kb/teams';
 import { Btn, Hover, Icon, Progress, useCompact } from '../ui/primitives';
 import { InlineMarkdown } from '../ui/Markdown';
 import { EmptyState, FileBar, Rail, RailHeading, useFile, useLinkHandler, usePad, useWidth, type LinkProps } from './common';
@@ -16,7 +17,10 @@ export function ChecklistScreen({ path }: { path: string }) {
   const links = useLinkHandler(path);
   const [content, setContent] = useState<string | null>(null);
   const latest = useRef<string | null>(null);
-  const [draft, setDraft] = useState<Draft | null>(null);
+  const [draft, setDraftState] = useState<Draft | null>(null);
+  // A team project where the user is a viewer: the list reads, nothing toggles or changes.
+  const viewer = !canWrite(app.accessOf(path));
+  const setDraft = (d: Draft | null) => setDraftState(viewer ? null : d);
   const { width, onLayout } = useWidth();
   const compact = useCompact();
   const pad = usePad();
@@ -34,6 +38,10 @@ export function ChecklistScreen({ path }: { path: string }) {
   if (!file || content == null || !list) return <View style={{ flex: 1 }} />;
 
   const commit = (next: string, undoLabel?: string) => {
+    if (viewer) {
+      app.toast({ icon: 'lock', text: 'Hai accesso in sola lettura a questo progetto' });
+      return;
+    }
     const prev = latest.current!;
     latest.current = next;
     setContent(next);
@@ -69,7 +77,11 @@ export function ChecklistScreen({ path }: { path: string }) {
             <Progress value={pct} height={5} />
           </View>
         ) : null}
-        <Btn variant="tint" icon="edit" label="Modifica" kbd="E" onPress={() => app.navigate({ name: 'file', path, edit: true })} />
+        {viewer ? (
+          <Btn icon="lock" label="Sola lettura" textColor={c.ink3} disabled style={{ opacity: 1 }} />
+        ) : (
+          <Btn variant="tint" icon="edit" label="Modifica" kbd="E" onPress={() => app.navigate({ name: 'file', path, edit: true })} />
+        )}
       </FileBar>
 
       <View style={{ flex: 1, flexDirection: 'row', minHeight: 0 }}>

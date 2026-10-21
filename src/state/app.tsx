@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { isWeb, lore } from '../kb/bridge';
-import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, NewAgent, ObsidianStatus, Permission, Prefs, SignInProvider, TreeNode, VaultStatus } from '../kb/types';
-import { basename, dirname, fileKind, findNode, projectKeyOf, unloadedProject } from '../kb/paths';
+import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, MyInvite, NewAgent, ObsidianStatus, Permission, Prefs, SignInProvider, Team, TeamRole, TreeNode, VaultStatus } from '../kb/types';
+import { basename, dirname, fileKind, findNode, projectKeyOf, projectLabel as projectLabelOf, unloadedProject } from '../kb/paths';
 
 export type Route =
   | { name: 'projects' }
@@ -10,7 +10,7 @@ export type Route =
   | { name: 'activity'; id?: string }
   | { name: 'settings'; section?: SettingsSection };
 
-export type SettingsSection = 'account' | 'general' | 'editor' | 'obsidian' | 'agents' | 'shortcuts';
+export type SettingsSection = 'account' | 'general' | 'team' | 'editor' | 'obsidian' | 'agents' | 'shortcuts';
 
 export type Dialog =
   | { kind: 'newFile'; dir: string }
@@ -22,7 +22,8 @@ export type Dialog =
   | { kind: 'unsaved'; next: () => void }
   | { kind: 'vaultSetup' }
   | { kind: 'vaultConfirm'; count: number; paths: string[] }
-  | { kind: 'vaultDisable' };
+  | { kind: 'vaultDisable' }
+  | { kind: 'moveToTeam'; path: string };
 
 export type MenuItem =
   | 'sep'
@@ -123,6 +124,14 @@ interface AppCtx {
   loadAll: () => Promise<void>;
   /** Progress of loadAll, null when idle. */
   loadProgress: { done: number; total: number } | null;
+  /** The teams the user belongs to, with their role. */
+  teams: Team[];
+  refreshTeams: () => Promise<void>;
+  /** Invitations addressed to the user. */
+  invites: MyInvite[];
+  answerInvite: (id: string, accept: boolean) => Promise<void>;
+  /** The user's role on the project a path belongs to ('owner' for their own projects). */
+  accessOf: (path: string) => TeamRole;
   editorRef: React.MutableRefObject<EditorHandle | null>;
   ops: {
     createFile: (path: string, content: string) => Promise<void>;
@@ -132,6 +141,7 @@ interface AppCtx {
     remove: (path: string) => Promise<void>;
     copyLink: (path: string) => Promise<void>;
     write: (path: string, content: string) => Promise<void>;
+    moveToTeam: (key: string, teamId: string) => Promise<void>;
   };
 }
 
@@ -173,6 +183,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [obsidian, setObsidian] = useState<ObsidianStatus>({ installed: false, registered: false });
   const [opening, setOpening] = useState<Set<string>>(new Set());
   const [loadProgress, setLoadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [invites, setInvites] = useState<MyInvite[]>([]);
   const editorRef = useRef<EditorHandle | null>(null);
   const lastUndo = useRef<{ run: () => void; until: number } | null>(null);
   const treeRef = useRef(tree);
@@ -206,6 +218,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refreshTeams = useCallback(async () => {
+    setTeams(await lore.teams());
+  }, []);
+
   const loadAgents = useCallback(async () => {
     setAgents(await lore.agents());
   }, []);
@@ -230,6 +246,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let t: ReturnType<typeof setTimeout>;
     const offChanged = lore.onChanged(async ({ paths, external, source }) => {
       await refresh();
+      if (!paths.length) refreshTeams().catch(() => {});
       setChangedPaths(paths);
       if (external) setChangedSource(source ?? 'agent');
       setRevision((v) => v + 1);
@@ -245,15 +262,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const offAuth = lore.onAuthChanged(setUser);
     const offVault = lore.onVaultStatus(setVault);
     const offProgress = lore.onLoadProgress((p) => setLoadProgress((cur) => (cur ? p : cur)));
+    const offInvites = lore.onInvites(setInvites);
     return () => {
       offProgress();
+      offInvites();
       offChanged();
       offActivity();
       offAuth();
       offVault();
       clearTimeout(t);
     };
-  }, [refresh, loadAudit]);
+  }, [refresh, loadAudit, refreshTeams]);
 
   // ------------------------------------------------------------------ toasts
   const dismissToast = useCallback((id: number) => setToasts((ts) => ts.filter((x) => x.id !== id)), []);
@@ -274,6 +293,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTree([]);
     setAgents([]);
     setAudit([]);
+    setTeams([]);
+    setInvites([]);
     setRoute({ name: 'projects' });
     history.current = [];
     setExpanded(new Set());
@@ -287,7 +308,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setActivity(a);
         setLastSeen(seen);
         await refresh();
-        await Promise.all([loadAgents(), loadAudit()]);
+        await Promise.all([loadAgents(), loadAudit(), refreshTeams().catch(() => {}), lore.myInvites().then((i) => live && setInvites(i)).catch(() => {})]);
       } catch (e) {
         if (live) fail(e);
       } finally {
@@ -297,7 +318,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => {
       live = false;
     };
-  }, [userId, refresh, loadAgents, loadAudit, fail]);
+  }, [userId, refresh, loadAgents, loadAudit, refreshTeams, fail]);
 
   // ------------------------------------------------------------- navigation
   const guard = useCallback((next: () => void, force?: boolean) => {
@@ -521,6 +542,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       write: async (path, content) => {
         await withSync(() => lore.write(path, content));
       },
+      moveToTeam: async (key, teamId) => {
+        const next = await withSync(() => lore.moveToTeam(key, teamId));
+        if (!next) return;
+        remap(key, next);
+        toast({ icon: 'group', mono: projectLabelOf(next), text: 'ora è del team' });
+      },
     }),
     [withSync, navigate, remap, toast],
   );
@@ -618,6 +645,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [toast, fail]);
 
+  const answerInvite = useCallback(
+    async (id: string, accept: boolean) => {
+      const inv = invites.find((i) => i.id === id);
+      try {
+        setInvites(await lore.answerInvite(id, accept));
+        if (accept) {
+          await Promise.all([refresh(), refreshTeams()]);
+          toast({ icon: 'group_add', text: `Sei entrato in ${inv?.teamName ?? 'un team'}` });
+        }
+      } catch (e) {
+        fail(e);
+      }
+    },
+    [invites, refresh, refreshTeams, toast, fail],
+  );
+
+  const accessOf = useCallback((path: string): TeamRole => {
+    const key = projectKeyOf(path);
+    const node = treeRef.current.find((n) => n.kind === 'folder' && n.path === key);
+    return (node?.kind === 'folder' && node.project?.access) || 'owner';
+  }, []);
+
   const markSeen = useCallback(() => {
     lore.markActivitySeen().then(setLastSeen);
   }, []);
@@ -679,6 +728,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     opening,
     loadAll,
     loadProgress,
+    teams,
+    refreshTeams,
+    invites,
+    answerInvite,
+    accessOf,
     editorRef,
     ops,
   };

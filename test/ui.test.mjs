@@ -58,7 +58,24 @@ function fakeBridge({ signedIn, vault = false }) {
         kind: 'folder', name: 'Archivio', path: 'Archivio', mtime: now - 86_400_000, size: 0, children: [],
         project: { key: 'Archivio', name: 'Archivio', loaded: false, team: null, access: 'owner', fileCount: 5, updatedAt: now - 86_400_000, checklist: { done: 1, total: 3 } },
       },
+      // A team project where the user can only read.
+      {
+        kind: 'folder', name: 'Piano', path: 'Piano@T2', mtime: now - 3_600_000, size: 0,
+        children: [{ kind: 'file', name: 'note.md', path: 'Piano@T2/note.md', mtime: now - 3_600_000, size: 20, author: 'teammate' }],
+        project: { key: 'Piano@T2', name: 'Piano', loaded: true, team: { id: 'T2', name: 'Clienti' }, access: 'viewer', fileCount: 1, updatedAt: now - 3_600_000, checklist: null },
+      },
     ],
+    teams: [
+      { id: 'T1', name: 'Squadra', role: 'owner', createdAt: now },
+      { id: 'T2', name: 'Clienti', role: 'viewer', createdAt: now },
+    ],
+    members: {
+      T1: [
+        { userId: 'u1', role: 'owner', joinedAt: now, name: 'Davide Berardi', email: 'd@example.com', isYou: true },
+        { userId: 'u2', role: 'editor', joinedAt: now, name: 'Anna Rossi', email: 'anna@example.com', isYou: false },
+      ],
+    },
+    invites: [{ id: 'inv1', teamId: 'T3', teamName: 'Ricerca', role: 'editor', invitedBy: 'Marco', createdAt: now, expiresAt: now + 7 * 86_400_000 }],
     archivio: [
       { kind: 'file', name: 'checklist.md', path: 'Archivio/checklist.md', mtime: now - 86_400_000, size: 30, author: 'you', done: 1, total: 3 },
       { kind: 'file', name: 'vecchio.md', path: 'Archivio/vecchio.md', mtime: now - 86_400_000, size: 30, author: 'agent' },
@@ -87,6 +104,11 @@ function fakeBridge({ signedIn, vault = false }) {
       confirm: null,
     },
     obsidian: { installed: true, registered: vault },
+    vaultProjects: [
+      { key: 'Athly', name: 'Athly', team: null, access: 'owner', selected: true, folder: 'Athly' },
+      { key: 'Archivio', name: 'Archivio', team: null, access: 'owner', selected: true, folder: 'Archivio' },
+      { key: 'Athly@T1', name: 'Athly', team: { id: 'T1', name: 'Squadra' }, access: 'viewer', selected: false, folder: 'Athly (Squadra)' },
+    ],
   };
   window.__calls = [];
   const rec = (name, fn) => async (...args) => {
@@ -110,6 +132,26 @@ function fakeBridge({ signedIn, vault = false }) {
       return state.tree;
     }),
     onLoadProgress: () => () => {},
+    onInvites: () => () => {},
+    teams: rec('teams', async () => state.teams),
+    team: rec('team', async (id) => state.teams.find((t) => t.id === id)),
+    createTeam: rec('createTeam', async (name) => {
+      const team = { id: 'T9', name, role: 'owner', createdAt: Date.now() };
+      state.teams = [...state.teams, team];
+      state.members.T9 = [{ userId: 'u1', role: 'owner', joinedAt: Date.now(), name: 'Davide Berardi', email: 'd@example.com', isYou: true }];
+      return team;
+    }),
+    renameTeam: rec('renameTeam', async () => true),
+    deleteTeam: rec('deleteTeam', async () => true),
+    teamMembers: rec('teamMembers', async (id) => state.members[id] ?? []),
+    setMemberRole: rec('setMemberRole', async () => true),
+    removeMember: rec('removeMember', async () => true),
+    teamInvites: rec('teamInvites', async () => []),
+    inviteToTeam: rec('inviteToTeam', async (id, email, role) => ({ id: 'i9', email, role, createdAt: now, expiresAt: now + 7 * 86_400_000 })),
+    revokeInvite: rec('revokeInvite', async () => true),
+    myInvites: rec('myInvites', async () => state.invites),
+    answerInvite: rec('answerInvite', async (id) => (state.invites = state.invites.filter((i) => i.id !== id))),
+    moveToTeam: rec('moveToTeam', async (key, teamId) => `${key}@${teamId}`),
     read: rec('read', async (p) => ({ path: p, content: state.contents[p] ?? '# x\n\n## Sezione\n', mtime: now, size: 3, birthtime: now, author: 'agent' })),
     write: rec('write', async () => true),
     create: rec('create', async () => true),
@@ -132,6 +174,11 @@ function fakeBridge({ signedIn, vault = false }) {
     vaultConfirm: rec('vaultConfirm', async () => state.vault),
     vaultReveal: rec('vaultReveal', async () => true),
     vaultSetLinkFormat: rec('vaultSetLinkFormat', async (f) => (state.vault = { ...state.vault, linkFormat: f })),
+    vaultProjects: rec('vaultProjects', async () => state.vaultProjects),
+    vaultSetProject: rec('vaultSetProject', async (key, on) => {
+      state.vaultProjects = state.vaultProjects.map((p) => (p.key === key ? { ...p, selected: on } : p));
+      return true;
+    }),
     obsidianStatus: rec('obsidianStatus', async () => state.obsidian),
     openInObsidian: rec('openInObsidian', async () => true),
     launchObsidian: rec('launchObsidian', async () => {}),
@@ -337,6 +384,70 @@ test('search offers to load the projects not opened yet', async () => {
   await page.close();
 });
 
+test('team projects: pill on the card, read-only for a viewer', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Piano', { exact: true }).first().waitFor();
+  assert.ok((await page.getByLabel('Team Clienti').count()) >= 1, 'the card carries the team');
+  await page.getByText('Piano', { exact: true }).first().click(); // the sidebar row
+  await page.getByText('Sei in sola lettura in questo progetto del team', { exact: false }).waitFor();
+  assert.equal(await page.getByText('Nuovo', { exact: true }).count(), 0, 'no "Nuovo" for a viewer');
+  await shot(page, '12-team-viewer');
+  await page.getByText('note.md', { exact: true }).first().click();
+  await page.getByText('Sola lettura', { exact: true }).waitFor();
+  assert.equal(await page.getByText('Modifica', { exact: true }).count(), 0);
+  // The item menu only reads.
+  await page.getByText('note.md', { exact: true }).nth(1).click({ button: 'right' }); // breadcrumb, then the sidebar row
+  await page.getByText('Copia link', { exact: true }).waitFor();
+  assert.equal(await page.getByText('Elimina', { exact: true }).count(), 0);
+  assert.equal(await page.getByText('Rinomina', { exact: true }).count(), 0);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('invites: accepted from the projects screen', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Invito al team Ricerca').waitFor();
+  await page.getByText('Marco ti invita come editor', { exact: false }).waitFor();
+  await shot(page, '13-invite');
+  await page.getByText('Accetta', { exact: true }).click();
+  assert.deepEqual(await calls(page, 'answerInvite'), [['inv1', true]]);
+  await page.getByText('Invito al team Ricerca').waitFor({ state: 'detached' });
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('settings: create a team, see its members, invite someone', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Impostazioni', { exact: true }).first().click();
+  await page.getByText('Team', { exact: true }).first().click();
+  await page.getByText('Squadra', { exact: true }).first().click();
+  await page.getByText('Anna Rossi', { exact: true }).waitFor();
+  await page.getByPlaceholder('nome@esempio.it').fill('luca@example.com');
+  await page.getByText('Sola lettura', { exact: true }).last().click();
+  await page.getByText('Invita', { exact: true }).last().click();
+  assert.deepEqual(await calls(page, 'inviteToTeam'), [['T1', 'luca@example.com', 'viewer']]);
+  await shot(page, '14-team-settings');
+  await page.getByPlaceholder('Nome del nuovo team').fill('Nuovo team');
+  await page.getByText('Crea team', { exact: true }).click();
+  assert.deepEqual(await calls(page, 'createTeam'), [['Nuovo team']]);
+  await page.getByText('Team Nuovo team creato').waitFor();
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('"Sposta in un team…" moves one of your projects into a team you can write in', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Athly', { exact: true }).first().click({ button: 'right' }); // the sidebar row
+  await page.getByText('Sposta in un team…').click();
+  await page.getByText('Sposta in un team', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('radio', { name: 'Clienti' }).count(), 0, 'not a team where you only read');
+  await shot(page, '15-move-to-team');
+  await page.getByText('Sposta', { exact: true }).click();
+  assert.deepEqual(await calls(page, 'moveToTeam'), [['Athly', 'T1']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
 test('obsidian: setup from settings enables the local vault', async () => {
   const { page, errors } = await open();
   await page.getByText('Usi Obsidian?').waitFor();
@@ -362,6 +473,13 @@ test('obsidian: status, "Apri in Obsidian" and the default editor', async () => 
   await page.getByText('Obsidian', { exact: true }).first().click();
   await page.getByText('Sincronizzata', { exact: true }).waitFor();
   await page.getByText('Non sincronizzati (1)').waitFor();
+  // Per-project selection: the team project is off until switched on.
+  await page.getByText('Progetti nella copia locale').waitFor();
+  const switches = page.getByRole('switch');
+  const n = await switches.count();
+  await switches.nth(n - 1).click();
+  assert.deepEqual(await calls(page, 'vaultSetProject'), [['Athly@T1', true]]);
+  await page.getByText('Athly (Squadra)/ · sola lettura').waitFor();
   await shot(page, '10-vault-status');
   // Default editor → Obsidian: "Modifica" hands the note over.
   await page.getByText('Obsidian', { exact: true }).last().click();

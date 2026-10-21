@@ -6,7 +6,7 @@ import { isWeb } from '../kb/bridge';
 import { Hover, Icon, isMac, useCompact } from '../ui/primitives';
 import { projectLabel } from '../kb/paths';
 
-const SETTINGS_LABEL = { account: 'Account', general: 'Generale', editor: 'Editor', obsidian: 'Obsidian', agents: 'Agenti', shortcuts: 'Scorciatoie' } as const;
+const SETTINGS_LABEL = { account: 'Account', general: 'Generale', team: 'Team', editor: 'Editor', obsidian: 'Obsidian', agents: 'Agenti', shortcuts: 'Scorciatoie' } as const;
 
 function crumbs(route: Route): { label: string; mono?: boolean; to?: Route }[] {
   switch (route.name) {

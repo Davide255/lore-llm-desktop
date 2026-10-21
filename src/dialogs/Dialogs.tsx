@@ -4,6 +4,7 @@ import { c, font, radius, t } from '../theme';
 import { useApp } from '../state/app';
 import { allFolders, basename, teamIdOf, countFiles, dirname, fileKind, findNode, join, projectLabel, renamed, templateContent, validateName, withMd, type Template } from '../kb/paths';
 import { Btn, Field, FieldLabel, Hint, Hover, Icon, IconWell, InfoStrip } from '../ui/primitives';
+import { canWrite, ROLE_LABEL } from '../kb/teams';
 import { DialogFooter, DialogFrame, DialogTitle, anchorBelow } from '../ui/overlays';
 import { VaultConfirmDialog, VaultDisableDialog, VaultSetupDialog } from './VaultDialogs';
 
@@ -32,6 +33,8 @@ export function DialogHost() {
       return <VaultConfirmDialog count={dialog.count} paths={dialog.paths} onClose={close} />;
     case 'vaultDisable':
       return <VaultDisableDialog onClose={close} />;
+    case 'moveToTeam':
+      return <MoveToTeamDialog path={dialog.path} onClose={close} />;
   }
 }
 
@@ -39,8 +42,9 @@ export function DialogHost() {
 function FolderSelect({ value, onChange, exclude, sameSpaceAs }: { value: string; onChange: (v: string) => void; exclude?: string; sameSpaceAs?: string }) {
   const app = useApp();
   const ref = useRef<View>(null);
-  // Items move only within one space (the user's own, or one team's).
+  // Items move only within one space (the user's own, or one team's), and never into a read-only project.
   const folders = allFolders(app.tree)
+    .filter((f) => canWrite(app.accessOf(f.path)))
     .filter((f) => !exclude || (f.path !== exclude && !f.path.startsWith(exclude + '/')))
     .filter((f) => sameSpaceAs === undefined || teamIdOf(f.path) === teamIdOf(sameSpaceAs));
   return (
@@ -348,3 +352,56 @@ function UnsavedDialog({ next, onClose }: { next: () => void; onClose: () => voi
   );
 }
 
+
+// ---------------------------------------------------------------------------
+// Sposta in un team: one of your own projects becomes a team's
+// ---------------------------------------------------------------------------
+function MoveToTeamDialog({ path, onClose }: { path: string; onClose: () => void }) {
+  const app = useApp();
+  const teams = app.teams.filter((t) => canWrite(t.role));
+  const [teamId, setTeamId] = useState(teams[0]?.id ?? '');
+  const team = teams.find((t) => t.id === teamId);
+  const submit = () => {
+    if (!team) return;
+    onClose();
+    app.ops.moveToTeam(path, team.id);
+  };
+  return (
+    <DialogFrame width={480} onDismiss={onClose} onSubmit={submit}>
+      <DialogTitle onClose={onClose}>Sposta in un team</DialogTitle>
+      <View style={{ paddingTop: 12, paddingHorizontal: 24, paddingBottom: 22, gap: 14 }}>
+        <Text style={t(400, 13.5, 1.55, { color: c.ink2 })}>
+          <Text style={{ fontFamily: font.mono, color: c.ink }}>{projectLabel(path)}/</Text> diventa un progetto del team: tutti i membri lo vedono, e resta
+          al team anche se ne esci.
+        </Text>
+        <View role="radiogroup" style={{ gap: 6 }}>
+          {teams.map((tm) => {
+            const on = tm.id === teamId;
+            return (
+              <Hover
+                key={tm.id}
+                role="radio"
+                aria-checked={on}
+                aria-label={tm.name}
+                onPress={() => setTeamId(tm.id)}
+                style={({ hovered }) => ({ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: radius.lg, borderWidth: 1, borderColor: on ? c.purple : c.hair, backgroundColor: on ? c.purple10 : hovered ? c.fill05 : 'transparent' })}
+              >
+                <Icon name="groups" size={18} color={c.blueTint} />
+                <Text style={[t(500, 13.5, 1.2), { flex: 1 }]}>{tm.name}</Text>
+                <Text style={t(400, 12, 1, { color: c.ink3 })}>{ROLE_LABEL[tm.role]}</Text>
+                <Icon name={on ? 'radio_button_checked' : 'radio_button_unchecked'} size={18} color={on ? c.purpleTint : c.ink3} />
+              </Hover>
+            );
+          })}
+        </View>
+        <InfoStrip icon="info">
+          <Text style={t(400, 12.5, 1.45, { color: c.ink2 })}>Gli agenti con accesso ai tuoi progetti non lo vedranno più finché gli agenti non potranno accedere ai team.</Text>
+        </InfoStrip>
+      </View>
+      <DialogFooter>
+        <Btn label="Annulla" onPress={onClose} />
+        <Btn variant="primary" label="Sposta" kbd="⏎" onPress={submit} disabled={!team} />
+      </DialogFooter>
+    </DialogFrame>
+  );
+}

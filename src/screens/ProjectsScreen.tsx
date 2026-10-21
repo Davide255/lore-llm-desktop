@@ -8,6 +8,8 @@ import type { FileNode, FolderNode } from '../kb/types';
 import { Btn, eventPoint, Hover, Icon, IconWell, Progress, SectionLabel, useCompact } from '../ui/primitives';
 import { FileTable } from '../ui/FileTable';
 import { EmptyState, usePad, useWidth } from './common';
+import { TeamPill } from '../ui/identity';
+import { ROLE_LABEL } from '../kb/teams';
 
 export function ProjectsScreen() {
   const app = useApp();
@@ -35,6 +37,8 @@ export function ProjectsScreen() {
         <Btn icon="sort" label={compact ? undefined : sort === 'recent' ? 'Recenti' : 'Nome'} onPress={() => setSort(sort === 'recent' ? 'name' : 'recent')} />
         <Btn variant="primary" icon="add" label={compact ? 'Nuovo' : 'Nuovo progetto'} onPress={() => app.openDialog({ kind: 'newProject' })} />
       </View>
+
+      {app.invites.length ? <InvitesCard /> : null}
 
       {app.obsidian.installed && app.vault && !app.vault.enabled && !app.prefs.obsidianBannerDismissed ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: radius.card, backgroundColor: c.purple12 }}>
@@ -106,6 +110,7 @@ function ProjectCard({ project }: { project: FolderNode }) {
   // Progress comes with the project's summary, whether it's open or not.
   const checklist = project.project?.checklist ?? (project.children.find((n) => n.kind === 'file' && n.name.toLowerCase() === 'checklist.md') as FileNode | undefined);
   const loaded = project.project?.loaded ?? true;
+  const team = project.project?.team;
   const n = countFiles(project);
   return (
     <Hover
@@ -126,9 +131,13 @@ function ProjectCard({ project }: { project: FolderNode }) {
           <Text numberOfLines={1} style={t(600, 15, 1.2, { letterSpacing: -0.22 })}>
             {project.name}
           </Text>
-          <Text style={t(400, 12, 1.3, { color: c.ink3, marginTop: 3 })}>
-            {n} file · {relTime(project.mtime)}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
+            {team ? <TeamPill name={team.name} /> : null}
+            <Text numberOfLines={1} style={[t(400, 12, 1.3, { color: c.ink3 }), { flexShrink: 0 }]}>
+              {n} file · {relTime(project.mtime)}
+              {project.project?.access === 'viewer' ? ' · sola lettura' : ''}
+            </Text>
+          </View>
         </View>
         <Hover
           onPress={(e: any) => {
@@ -155,5 +164,38 @@ function ProjectCard({ project }: { project: FolderNode }) {
         <Text style={t(400, 11.5, 1, { color: c.ink3 })}>Nessuna checklist</Text>
       )}
     </Hover>
+  );
+}
+
+/** Invitations to join a team, answered right here. */
+function InvitesCard() {
+  const app = useApp();
+  const [busy, setBusy] = useState<string | null>(null);
+  const answer = async (id: string, accept: boolean) => {
+    setBusy(id);
+    try {
+      await app.answerInvite(id, accept);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <View style={{ gap: 10 }}>
+      {app.invites.map((i) => (
+        <View key={i.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: radius.card, backgroundColor: c.blue18 }}>
+          <IconWell icon="group_add" tint="blue" />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text numberOfLines={1} style={t(500, 14, 1.3)}>
+              Invito al team {i.teamName}
+            </Text>
+            <Text numberOfLines={1} style={t(400, 12.5, 1.45, { color: c.ink2, marginTop: 3 })}>
+              {i.invitedBy ? `${i.invitedBy} ti invita` : 'Sei invitato'} come {ROLE_LABEL[i.role].toLowerCase()}. I progetti del team compariranno qui.
+            </Text>
+          </View>
+          <Btn label="Rifiuta" disabled={busy === i.id} onPress={() => answer(i.id, false)} />
+          <Btn variant="primary" label={busy === i.id ? 'Un momento…' : 'Accetta'} disabled={busy === i.id} onPress={() => answer(i.id, true)} />
+        </View>
+      ))}
+    </View>
   );
 }

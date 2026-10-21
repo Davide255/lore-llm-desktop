@@ -1,15 +1,20 @@
-import { basename, dirname, fileKind, findNode } from '../kb/paths';
-import type { TreeNode } from '../kb/types';
+import { basename, dirname, fileKind, findNode, teamIdOf } from '../kb/paths';
+import { canWrite } from '../kb/teams';
+import type { TeamRole, TreeNode } from '../kb/types';
 import type { MenuItem, Route, useApp } from './app';
 
 type App = ReturnType<typeof useApp>;
 
-export type Capability = 'open' | 'edit' | 'obsidian' | 'rename' | 'move' | 'duplicate' | 'copyLink' | 'delete' | 'newHere';
+export type Capability = 'open' | 'edit' | 'obsidian' | 'rename' | 'move' | 'duplicate' | 'copyLink' | 'delete' | 'newHere' | 'moveToTeam';
 
 /** What can be done to an item. index.md is generated, so it's view-only;
- *  checklist.md keeps its name so agents can always find it. */
-export function capabilities(path: string, node: TreeNode | null): Set<Capability> {
+ *  checklist.md keeps its name so agents can always find it. In a team's
+ *  project where the user is a viewer, everything is read-only. */
+export function capabilities(path: string, node: TreeNode | null, access: TeamRole = 'owner'): Set<Capability> {
   if (!node) return new Set();
+  if (!canWrite(access)) return new Set(node.kind === 'folder' ? ['open', 'copyLink'] : fileKind(path) === 'attachment' ? ['open', 'copyLink'] : ['open', 'obsidian', 'copyLink']);
+  // Only the user's own projects move into a team.
+  if (node.kind === 'folder' && !path.includes('/') && !teamIdOf(path)) return new Set(['open', 'newHere', 'rename', 'move', 'copyLink', 'delete', 'moveToTeam']);
   if (node.kind === 'folder') return new Set(['open', 'newHere', 'rename', 'move', 'copyLink', 'delete']);
   const kind = fileKind(path);
   if (kind === 'index') return new Set(['open', 'obsidian', 'copyLink']);
@@ -26,13 +31,13 @@ export function openRoute(node: TreeNode, edit = false): Route {
 /** Double click / E / "Modifica" on an item: the editor (Lore or Obsidian), or just open it. */
 export function editNode(app: App, node: TreeNode) {
   const kind = fileKind(node.path);
-  if (node.kind === 'file' && kind !== 'index' && kind !== 'attachment') app.editFile(node.path);
+  if (node.kind === 'file' && kind !== 'index' && kind !== 'attachment' && canWrite(app.accessOf(node.path))) app.editFile(node.path);
   else app.navigate(openRoute(node));
 }
 
 export function itemMenu(app: App, path: string): MenuItem[] {
   const node = findNode(app.tree, path);
-  const can = capabilities(path, node);
+  const can = capabilities(path, node, app.accessOf(path));
   if (!node) return [];
   const items: MenuItem[] = [];
   const add = (cap: Capability, item: Exclude<MenuItem, 'sep'>) => can.has(cap) && items.push(item);
@@ -48,6 +53,7 @@ export function itemMenu(app: App, path: string): MenuItem[] {
   sep();
   add('rename', { icon: 'drive_file_rename_outline', label: 'Rinomina', kbd: 'F2', onPress: () => app.openDialog({ kind: 'rename', path }) });
   add('move', { icon: 'drive_file_move', label: 'Sposta in…', kbd: '⇧⌘M', onPress: () => app.openDialog({ kind: 'move', path }) });
+  if (app.teams.some((t) => canWrite(t.role))) add('moveToTeam', { icon: 'group', label: 'Sposta in un team…', onPress: () => app.openDialog({ kind: 'moveToTeam', path }) });
   add('duplicate', { icon: 'content_copy', label: 'Duplica', kbd: '⌘D', onPress: () => app.ops.duplicate(path) });
   add('copyLink', { icon: 'link', label: fileKind(path) === 'index' ? 'Condividi link' : 'Copia link', kbd: '⇧⌘C', onPress: () => app.ops.copyLink(path) });
   sep();
@@ -66,7 +72,7 @@ export function handleItemShortcut(app: App, e: KeyboardEvent): boolean {
   const path = app.selected;
   if (!path) return false;
   const node = findNode(app.tree, path);
-  const can = capabilities(path, node);
+  const can = capabilities(path, node, app.accessOf(path));
   const mod = e.metaKey || e.ctrlKey;
   const key = e.key.toLowerCase();
   if (key === 'f2' && can.has('rename')) return app.openDialog({ kind: 'rename', path }), true;

@@ -6,7 +6,7 @@ import { editNode, openItemMenu, openRoute } from '../state/actions';
 import { countFiles, fileKind, projectIcon, projects, relTime, rootFiles } from '../kb/paths';
 import type { TreeNode } from '../kb/types';
 import { Avatar, eventPoint, Hover, Icon, Kbd, Pill, Spinner } from '../ui/primitives';
-import { AgentAvatar } from '../ui/identity';
+import { AgentAvatar, TeamPill } from '../ui/identity';
 
 export function Sidebar({ style }: { style?: StyleProp<ViewStyle> }) {
   const app = useApp();
@@ -163,6 +163,7 @@ function TreeRow({ node, depth }: { node: TreeNode; depth: number }) {
           {node.name}
           {isFolder && !isProject ? '/' : ''}
         </Text>
+        {isProject && node.kind === 'folder' && node.project?.team ? <TeamPill name={node.project.team.name} compact /> : null}
         {isProject ? <Text style={t(400, 11, 1, { color: c.ink3 })}>{countFiles(node)}</Text> : null}
         {kind === 'index' ? <Icon name="lock" size={13} color={c.ink3} /> : null}
         {kind === 'checklist' && node.kind === 'file' && node.total ? (

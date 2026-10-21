@@ -40,6 +40,23 @@ function TeammateAvatar({ size }: { size: number }) {
 
 export const authorName = (author: Author, agent?: AgentRef) => (author === 'you' ? 'Tu' : author === 'teammate' ? 'Un collaboratore' : agent?.name ?? 'Agente');
 
+/** The team a project belongs to, next to its name. */
+export function TeamPill({ name, compact }: { name: string; compact?: boolean }) {
+  return (
+    <View
+      accessibilityLabel={`Team ${name}`}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: compact ? 5 : 8, paddingVertical: compact ? 1 : 3, borderRadius: 999, backgroundColor: c.blue18, flexShrink: 1, minWidth: 0 }}
+    >
+      <Icon name="group" size={compact ? 11 : 13} color={c.blueTint} />
+      {compact ? null : (
+        <Text numberOfLines={1} style={t(500, 11.5, 1.2, { color: c.blueTint })}>
+          {name}
+        </Text>
+      )}
+    </View>
+  );
+}
+
 /** Avatar + name, for table cells and rails. */
 export function AuthorChip({ author, agent, size = 22 }: { author: Author; agent?: AgentRef; size?: number }) {
   return (

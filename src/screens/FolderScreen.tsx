@@ -5,7 +5,9 @@ import { useApp } from '../state/app';
 import { openItemMenu } from '../state/actions';
 import { countFiles, fileKind, findNode, relTime } from '../kb/paths';
 import type { FileNode, FolderNode } from '../kb/types';
-import { Btn, eventPoint, Hover, Icon, IconBtn, IconWell, Progress, useCompact } from '../ui/primitives';
+import { Btn, eventPoint, Hover, Icon, IconBtn, IconWell, InfoStrip, Progress, useCompact } from '../ui/primitives';
+import { TeamPill } from '../ui/identity';
+import { canWrite } from '../kb/teams';
 import { FileTable } from '../ui/FileTable';
 import { anchorBelow } from '../ui/overlays';
 import { EmptyState, usePad } from './common';
@@ -23,6 +25,9 @@ export function FolderScreen({ path }: { path: string }) {
   }
 
   const isProject = !path.includes('/');
+  const access = app.accessOf(path);
+  const viewer = !canWrite(access);
+  const team = isProject ? node.project?.team : null;
   const index = node.children.find((n) => n.kind === 'file' && fileKind(n.path) === 'index') as FileNode | undefined;
   const checklist = node.children.find((n) => n.kind === 'file' && fileKind(n.path) === 'checklist') as FileNode | undefined;
   const rows = isProject ? node.children.filter((n) => n !== index && n !== checklist) : node.children;
@@ -48,9 +53,12 @@ export function FolderScreen({ path }: { path: string }) {
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: compact ? 24 : 34, paddingHorizontal: pad, gap: 24 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 10 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text numberOfLines={1} style={t(700, 28, 1.15, { letterSpacing: -0.98 })}>
-            {node.name}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <Text numberOfLines={1} style={[t(700, 28, 1.15, { letterSpacing: -0.98 }), { flexShrink: 1 }]}>
+              {node.name}
+            </Text>
+            {team ? <TeamPill name={team.name} /> : null}
+          </View>
           <Text numberOfLines={1} style={t(400, 13.5, 1.2, { color: c.ink3, marginTop: 9 })}>
             {[index?.summary, `${n} file`, `modificato ${relTime(node.mtime)}`].filter(Boolean).join(' · ')}
           </Text>
@@ -64,10 +72,20 @@ export function FolderScreen({ path }: { path: string }) {
             }}
           />
         </View>
-        <View ref={newRef}>
-          <Btn variant="primary" icon="add" label="Nuovo" iconRight="expand_more" onPress={openNewMenu} />
-        </View>
+        {viewer ? null : (
+          <View ref={newRef}>
+            <Btn variant="primary" icon="add" label="Nuovo" iconRight="expand_more" onPress={openNewMenu} />
+          </View>
+        )}
       </View>
+
+      {viewer ? (
+        <InfoStrip icon="lock">
+          <Text style={t(400, 12.5, 1.45, { color: c.ink2 })}>
+            Sei in sola lettura in questo progetto del team: puoi leggere e cercare, non modificare. Un proprietario del team può cambiare il tuo ruolo.
+          </Text>
+        </InfoStrip>
+      ) : null}
 
       {isProject ? (
         <View style={{ flexDirection: compact ? 'column' : 'row', gap: compact ? 10 : 14 }}>
@@ -107,7 +125,7 @@ export function FolderScreen({ path }: { path: string }) {
                 )
               }
             />
-          ) : (
+          ) : viewer ? null : (
             <Hover
               onPress={() => app.ops.createFile(`${path}/checklist.md`, '## Da fare\n\n- [ ] \n')}
               style={({ hovered }) => ({ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 16, borderRadius: radius.card, borderWidth: 1, borderStyle: 'dashed', borderColor: hovered ? c.purple40 : c.hair })}

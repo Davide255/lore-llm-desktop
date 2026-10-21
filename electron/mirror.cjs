@@ -154,6 +154,12 @@ function createMirror({ request, requestRaw }) {
       return files.has(rel) || attachments.has(rel);
     },
 
+    /** Stop mirroring a project without reporting its files as deleted (it moved to a team). */
+    forget(key) {
+      drop(key);
+      summaries.delete(key);
+    },
+
     /** Every path of the loaded projects, notes and attachments. */
     paths() {
       return [...files.keys(), ...attachments.keys()];

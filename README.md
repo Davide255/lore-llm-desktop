@@ -32,6 +32,18 @@ cursors (`/v1/version`, one request: your space and each team's): open views ref
 open project lands in **Attività** with a side-by-side diff and *Ripristina*. Projects not opened only refresh
 their card.
 
+## Teams
+
+*Impostazioni → Team*: create a team, rename or delete it (only when it has no files left), see its members,
+change their role (**Proprietario**, **Editor**, **Sola lettura**), remove them or leave, and invite people by
+email. Invitations arrive in the app (a card on the Projects screen and in Settings) and are accepted there.
+
+A team's projects sit in the same list as yours, with the team's name next to them. In the main process they
+are addressed as `Name@<teamId>` (`electron/spaces.cjs`), which the HTTP layer turns into `?owner=t:<teamId>`.
+Where you are a viewer, everything reads and nothing edits (the server enforces it too). *Sposta in un team…*
+in a project's menu moves one of your projects into a team where you can write. Files changed by teammates
+show as *Un collaboratore* (the server doesn't record who yet). Agents still reach your own projects only.
+
 ## Obsidian
 
 *Impostazioni → Obsidian* turns on a **local copy** of the KB: a plain folder (default `~/Documents/Lore LLM`)
@@ -44,6 +56,11 @@ background). *Apri in Obsidian* opens the current note; *Editor predefinito* can
   **three-way merged** (`electron/merge.cjs`). Overlapping edits keep yours in the file and save the cloud's as
   `name (conflitto … ).md`, with an entry in Attività.
 - Renames and folder moves are recognised (same content, new path) and become server moves, in both directions.
+- **Which projects**: all of your own projects by default (new ones too); team projects when you switch them on,
+  in folders named `Project (Team)` (a clash gets ` (2)`; renaming the team moves the folder). Each project
+  is loaded before it takes part, so a project still loading or switched off is never read as deleted on
+  either side. Switching one off forgets its sync state and leaves its folder on disk. Projects where you are
+  a viewer are written read-only and local edits are reverted.
 - `index.md` is written read-only and any local edit is reverted. Files that can't sync (outside a project,
   other types, too large) stay local and are listed in the settings page.
 - Cloud deletions go to the OS trash. If many files vanish locally at once, sync pauses and asks.
