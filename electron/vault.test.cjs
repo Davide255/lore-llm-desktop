@@ -5,7 +5,7 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { VaultSync, classify, planSync, conflictName } = require('./vault.cjs');
+const { VaultSync, classify, planSync, folderNames, conflictName } = require('./vault.cjs');
 
 const sha = (s) => crypto.createHash('sha256').update(Buffer.from(s)).digest('hex');
 
@@ -174,7 +174,20 @@ function fakeMirror() {
   return mirror;
 }
 
-async function setup(t, files = {}) {
+/** A layout the test can change between passes: which projects are covered, their folders, the read-only ones. */
+function testLayout({ folders = {}, covered = null, readonly = [] } = {}) {
+  const st = { folders: { ...folders }, covered: covered && new Set(covered), readonly: new Set(readonly) };
+  return {
+    st,
+    folderOf: (k) => st.folders[k] ?? k,
+    keyOf: (f) => Object.keys(st.folders).find((k) => st.folders[k] === f) ?? f,
+    covers: (k) => !st.covered || st.covered.has(k),
+    readonly: (k) => st.readonly.has(k),
+    folders: () => new Map(Object.entries(st.folders).filter(([k]) => !st.covered || st.covered.has(k))),
+  };
+}
+
+async function setup(t, files = {}, { layout } = {}) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'lore-vault-'));
   const root = path.join(dir, 'vault');
   await fsp.mkdir(root);
@@ -189,6 +202,7 @@ async function setup(t, files = {}) {
       userId: 'u1',
       server: 'test',
       mirror,
+      layout,
       trash: async (abs) => {
         trashed.push(path.relative(root, abs));
         await fsp.rm(abs, { recursive: true });
@@ -404,4 +418,119 @@ test('engine: watcher picks up edits on its own', async (t) => {
   for (let i = 0; i < 50 && mirror.store.get('P/a.md').data.toString() !== 'watched'; i++) await new Promise((r) => setTimeout(r, 50));
   await engine.flush();
   assert.equal(mirror.store.get('P/a.md').data.toString(), 'watched');
+});
+
+test('folderNames: team projects are "Name (Team)", clashes get a number', () => {
+  const names = folderNames([
+    { key: 'Athly', name: 'Athly', team: null },
+    { key: 'athly (squadra)', name: 'athly (squadra)', team: null },
+    { key: 'Athly@T2', name: 'Athly', team: { id: 'T2', name: 'Squadra' } },
+    { key: 'Athly@T1', name: 'Athly', team: { id: 'T1', name: 'Squadra' } },
+    { key: 'Note@T3', name: 'Note', team: { id: 'T3', name: 'R&D: 2026/27' } },
+  ]);
+  assert.deepEqual(Object.fromEntries(names), {
+    Athly: 'Athly',
+    'athly (squadra)': 'athly (squadra)',
+    'Athly@T1': 'Athly (Squadra) (2)', // the user's own project keeps its name (case-insensitive clash)
+    'Athly@T2': 'Athly (Squadra) (3)',
+    'Note@T3': 'Note (R&D 2026 27)',
+  });
+});
+
+test('classify: team keys are validated by name; read-only projects', () => {
+  assert.equal(classify('Athly@T1/a.md', 1).status, 'sync');
+  assert.equal(classify('Athly@T1/a.md', 1, (k) => k === 'Athly@T1').status, 'readonly');
+  assert.equal(classify('Bad (name)/a.md', 1).status, 'unsynced');
+});
+
+test('selection: only covered projects sync; the others are never read as deleted or new', async (t) => {
+  const layout = testLayout({ covered: ['P'] });
+  const { root, engine, mirror, write, pass, disk, trashed } = await setup(t, { 'P/a.md': 'a\n', 'Q/b.md': 'b\n' }, { layout });
+  // A local folder for Q exists already (synced before, or made by hand).
+  await write('Q/local.md', 'mine\n');
+  await engine.start();
+  assert.equal(disk('P/a.md'), 'a\n');
+  assert.ok(!fs.existsSync(path.join(root, 'Q/b.md')), 'Q is not downloaded');
+  assert.deepEqual(mirror.calls, [], 'Q/local.md is not uploaded');
+
+  // Q selected: merged by the usual planner.
+  layout.st.covered.add('Q');
+  await pass();
+  assert.equal(disk('Q/b.md'), 'b\n');
+  assert.equal(mirror.store.get('Q/local.md').data.toString(), 'mine\n');
+
+  // Q deselected (or not loaded yet): its files stay, its cloud copy too, local edits wait.
+  layout.st.covered.delete('Q');
+  mirror.calls.length = 0;
+  await fsp.rm(path.join(root, 'Q/b.md'));
+  await write('Q/local.md', 'edited while not synced\n');
+  mirror.remoteWrite('Q/new.md', 'n\n');
+  await pass();
+  assert.deepEqual(mirror.calls, []);
+  assert.ok(mirror.store.has('Q/b.md'));
+  assert.deepEqual(trashed, []);
+  assert.ok(!fs.existsSync(path.join(root, 'Q/new.md')));
+  assert.ok(Object.keys(engine.manifest.files).includes('Q/b.md'), 'Q keeps its manifest entries while uncovered');
+
+  // Deselecting for good forgets Q; the folder stays on disk.
+  await engine.forgetProject('Q');
+  assert.ok(!Object.keys(engine.manifest.files).some((k) => k.startsWith('Q/')));
+  assert.equal(disk('Q/local.md'), 'edited while not synced\n');
+});
+
+test('team projects sit in "Name (Team)" folders and move when the team is renamed', async (t) => {
+  const layout = testLayout({ folders: { 'X@T1': 'X (Squadra)' } });
+  const { root, engine, mirror, write, pass, disk, events } = await setup(t, { 'X@T1/c.md': 'c\n', 'P/a.md': 'a\n' }, { layout });
+  await engine.start();
+  assert.equal(disk('X (Squadra)/c.md'), 'c\n');
+  assert.ok(!fs.existsSync(path.join(root, 'X@T1')));
+
+  await write('X (Squadra)/c.md', 'c2\n');
+  await write('X (Squadra)/d.md', 'd\n');
+  await pass();
+  assert.equal(mirror.store.get('X@T1/c.md').data.toString(), 'c2\n');
+  assert.equal(mirror.store.get('X@T1/d.md').data.toString(), 'd\n');
+
+  mirror.calls.length = 0;
+  layout.st.folders['X@T1'] = 'X (Nuovo nome)';
+  await pass();
+  assert.equal(disk('X (Nuovo nome)/c.md'), 'c2\n');
+  assert.ok(!fs.existsSync(path.join(root, 'X (Squadra)')));
+  assert.deepEqual(mirror.calls, [], 'a renamed team moves nothing in the cloud');
+  assert.ok(events.some((e) => e.type === 'notice' && /ora si chiama/.test(e.message)));
+
+  // The project renamed in Lore: its folder is resolved before the cloud move, then moved as a whole.
+  const before = engine.abs('X@T1');
+  await mirror.move('X@T1', 'Y@T1');
+  delete layout.st.folders['X@T1'];
+  layout.st.folders['Y@T1'] = 'Y (Nuovo nome)';
+  mirror.calls.length = 0;
+  await engine.renameLocal('X@T1', 'Y@T1', before);
+  await pass();
+  assert.equal(disk('Y (Nuovo nome)/c.md'), 'c2\n');
+  assert.ok(!fs.existsSync(before));
+  assert.deepEqual(mirror.calls, []);
+  assert.ok(Object.keys(engine.manifest.files).includes('Y@T1/c.md'));
+});
+
+test('read-only projects: files are read-only, local edits are reverted, new files stay local', async (t) => {
+  const layout = testLayout({ folders: { 'V@T1': 'V (Squadra)' }, readonly: ['V@T1'] });
+  const { root, engine, mirror, write, pass, disk, events } = await setup(t, { 'V@T1/a.md': 'a\n' }, { layout });
+  await engine.start();
+  assert.equal(fs.statSync(path.join(root, 'V (Squadra)/a.md')).mode & 0o222, 0);
+
+  await write('V (Squadra)/a.md', 'hacked\n');
+  await write('V (Squadra)/new.md', 'new\n');
+  await pass();
+  assert.equal(disk('V (Squadra)/a.md'), 'a\n');
+  assert.ok(events.some((e) => e.type === 'notice' && /sola lettura/.test(e.message)));
+  assert.deepEqual(mirror.calls, []);
+  assert.ok(engine.status().unsynced.some((u) => u.path === 'V (Squadra)/new.md' && /sola lettura/.test(u.reason)));
+
+  // Deleting it locally doesn't delete it for the team: it comes back.
+  await fsp.chmod(path.join(root, 'V (Squadra)/a.md'), 0o644);
+  await fsp.rm(path.join(root, 'V (Squadra)/a.md'));
+  await pass();
+  assert.equal(disk('V (Squadra)/a.md'), 'a\n');
+  assert.ok(mirror.store.has('V@T1/a.md'));
 });

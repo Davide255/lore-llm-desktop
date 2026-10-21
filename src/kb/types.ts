@@ -170,6 +170,17 @@ export interface VaultStatus {
   confirm: { count: number; paths: string[] } | null;
 }
 
+/** A project in the local copy's selection. Team projects sit in `Name (Team)` folders. */
+export interface VaultProject {
+  key: string;
+  name: string;
+  team: { id: string; name: string } | null;
+  access: TeamRole;
+  selected: boolean;
+  /** Its folder in the local copy. */
+  folder: string;
+}
+
 export interface VaultPreview {
   ok: boolean;
   root: string;
@@ -245,6 +256,9 @@ export interface LoreBridge {
   /** Shows a file (or the vault folder) in Finder/Explorer. */
   vaultReveal(path?: string): Promise<boolean>;
   vaultSetLinkFormat(format: LinkFormat): Promise<VaultStatus>;
+  /** The projects the local copy can hold, and whether each one syncs. */
+  vaultProjects(): Promise<VaultProject[]>;
+  vaultSetProject(key: string, on: boolean): Promise<boolean>;
   obsidianStatus(): Promise<ObsidianStatus>;
   /** Opens a note (or the vault) in Obsidian. */
   openInObsidian(path?: string): Promise<boolean>;

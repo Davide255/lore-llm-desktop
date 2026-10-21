@@ -5,10 +5,15 @@
 // both sides changed.
 //
 // Layout of the pieces (no Electron imports: tested with plain node):
-//   classify()  which local paths sync, which are read-only, which are skipped
-//   scanVault() what is on disk (hashing only files whose size/mtime moved)
-//   planSync()  pure: manifest (last synced state) + remote + local -> actions
-//   VaultSync   the engine: watcher, serial queue, executor, manifest, status
+//   classify()     which local paths sync, which are read-only, which are skipped
+//   scanVault()    what is on disk (hashing only files whose size/mtime moved)
+//   planSync()     pure: manifest (last synced state) + remote + local -> actions
+//   folderNames()  pure: the local folder of each project (team ones get the team's name)
+//   VaultSync      the engine: watcher, serial queue, executor, manifest, status
+//
+// Everything is planned in cloud paths (`Project/…`, `Project@<teamId>/…` for a
+// team's project). A layout says which projects this vault covers and where each
+// one sits on disk; only disk access translates (`abs()`, `scanVault()`).
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
@@ -42,6 +47,58 @@ function kindOf(rel) {
 }
 
 const isIndexRel = (rel) => rel.split('/').length === 2 && rel.toLowerCase().endsWith('/index.md');
+const projectOf = (rel) => (rel.includes('/') ? rel.slice(0, rel.indexOf('/')) : rel);
+// A team project's key carries its team (`Name@<teamId>`, see spaces.cjs): the name alone is validated.
+const projectName = (key) => key.replace(/@[A-Za-z0-9-]{1,64}$/, '');
+
+/**
+ * Where projects sit on disk and which ones sync. The default is the plain
+ * layout: every project, in a folder named after it, writable.
+ *   folderOf(key)   local folder of a project
+ *   keyOf(folder)   project of a local folder (unknown folders are new projects of the user)
+ *   covers(key)     the project syncs now (selected, and its files are mirrored)
+ *   readonly(key)   the user can only read it (a team where they are a viewer)
+ *   folders()       Map(key -> folder) of the covered projects, to notice a renamed team
+ */
+const PLAIN_LAYOUT = {
+  folderOf: (key) => key,
+  keyOf: (folder) => folder,
+  covers: () => true,
+  readonly: () => false,
+  folders: () => new Map(),
+};
+
+/** `rel` with its project segment swapped by `fn`, or null when `fn` says it doesn't map. */
+function swapProject(rel, fn) {
+  const slash = rel.indexOf('/');
+  if (slash === -1) return rel; // files at the root stay where they are (and never sync)
+  const head = fn(rel.slice(0, slash));
+  return head == null ? null : head + rel.slice(slash);
+}
+
+/** Folder names never contain what a file system refuses. */
+const safeFolder = (s) => s.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim();
+
+/**
+ * The local folder of each project: `Name` for the user's own, `Name (Team)` for a
+ * team's. A name already taken (also differing only by case) gets ` (2)`, ` (3)`…
+ * projects: [{ key, name, team: {id, name} | null }]. Returns Map(key -> folder).
+ */
+function folderNames(projects) {
+  const out = new Map();
+  const taken = new Set();
+  const take = (key, want) => {
+    let name = want;
+    for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${want} (${n})`;
+    taken.add(name.toLowerCase());
+    out.set(key, name);
+  };
+  const own = projects.filter((p) => !p.team);
+  const teams = projects.filter((p) => p.team).sort((a, b) => (a.key < b.key ? -1 : 1));
+  for (const p of own) take(p.key, p.key);
+  for (const p of teams) take(p.key, safeFolder(`${p.name} (${p.team.name})`) || p.key);
+  return out;
+}
 
 const REASONS = {
   root: 'Fuori da un progetto: spostalo in una cartella',
@@ -51,22 +108,24 @@ const REASONS = {
   project: 'Nome del progetto non valido',
   case: 'Esiste già un file con lo stesso nome (maiuscole/minuscole diverse)',
   index: 'index.md è generato automaticamente e non viene caricato',
+  readonly: 'Progetto in sola lettura: i file creati qui non vengono caricati',
 };
 
 /**
- * What to do with a local path. `{status: 'sync'|'readonly'|'ignore'|'unsynced', reason?}`.
+ * What to do with a path (in cloud terms). `{status: 'sync'|'readonly'|'ignore'|'unsynced', reason?}`.
  * Dot-segments (.obsidian, .trash, .lore-sync, .DS_Store) are invisible to sync.
+ * `readonlyProject(key)`: projects the user can only read.
  */
-function classify(rel, size = 0) {
+function classify(rel, size = 0, readonlyProject = () => false) {
   const segs = rel.split('/');
   if (segs.some((s) => s.startsWith('.') || s === '') || JUNK_RE.test(segs[segs.length - 1])) return { status: 'ignore' };
   const kind = kindOf(rel);
   if (!kind) return { status: 'unsynced', reason: REASONS.type };
   if (segs.length < 2) return { status: 'unsynced', reason: REASONS.root };
-  if (!PROJECT_RE.test(segs[0])) return { status: 'unsynced', reason: REASONS.project };
+  if (!PROJECT_RE.test(projectName(segs[0]))) return { status: 'unsynced', reason: REASONS.project };
   if (rel.length > MAX_PATH || segs.some((s) => s.length > MAX_SEGMENT)) return { status: 'unsynced', reason: REASONS.name };
   if (size > (kind === 'md' ? MAX_NOTE : MAX_ATTACHMENT)) return { status: 'unsynced', reason: REASONS.size };
-  if (isIndexRel(rel)) return { status: 'readonly' };
+  if (isIndexRel(rel) || readonlyProject(segs[0])) return { status: 'readonly' };
   return { status: 'sync' };
 }
 
@@ -77,12 +136,18 @@ async function hashFile(abs) {
 /**
  * Walk the vault. `prev` is the manifest: files whose size and mtime still
  * match it keep their recorded hash, everything else is hashed again.
- * Returns `{ files: Map(rel -> {size, mtimeMs, kind, hash, readonly}), dirs: Set, unsynced: [] }`.
+ * Paths come back in cloud terms through `layout`; folders of projects the
+ * vault doesn't cover are not read at all.
+ * Returns `{ files: Map(rel -> {size, mtimeMs, kind, hash, readonly, local}), dirs: Set, unsynced: [] }`.
  */
-async function scanVault(root, prev = {}) {
+async function scanVault(root, prev = {}, layout = PLAIN_LAYOUT) {
   const files = new Map();
   const dirs = new Set();
   const unsynced = [];
+  const toCloud = (local) => swapProject(local, (folder) => {
+    const key = layout.keyOf(folder);
+    return key != null && layout.covers(key) ? key : null;
+  });
   async function walk(absDir, relDir) {
     let entries;
     try {
@@ -94,31 +159,36 @@ async function scanVault(root, prev = {}) {
     for (const e of entries) {
       // macOS can hand back decomposed (NFD) names; the server stores NFC.
       const name = e.name.normalize('NFC');
-      const rel = relDir ? `${relDir}/${name}` : name;
+      const local = relDir ? `${relDir}/${name}` : name;
       if (name.startsWith('.') || JUNK_RE.test(name)) continue;
       const abs = path.join(absDir, e.name);
       if (e.isDirectory()) {
+        // A project folder the vault doesn't cover (not selected, not loaded yet) is left alone.
+        const rel = relDir ? toCloud(local) : toCloud(`${local}/x`)?.slice(0, -2);
+        if (rel == null) continue;
         dirs.add(rel);
-        await walk(abs, rel);
+        await walk(abs, local);
         continue;
       }
       if (!e.isFile()) continue; // symlinks and specials stay local
+      const rel = toCloud(local);
+      if (rel == null) continue;
       const st = await fsp.stat(abs).catch(() => null);
       if (!st) continue;
-      const c = classify(rel, st.size);
+      const c = classify(rel, st.size, layout.readonly);
       if (c.status === 'ignore') continue;
       if (c.status === 'unsynced') {
-        unsynced.push({ path: rel, reason: c.reason });
+        unsynced.push({ path: local, reason: c.reason });
         continue;
       }
-      files.set(rel, { size: st.size, mtimeMs: st.mtimeMs, kind: kindOf(rel), readonly: c.status === 'readonly' });
+      files.set(rel, { size: st.size, mtimeMs: st.mtimeMs, kind: kindOf(rel), readonly: c.status === 'readonly', local });
     }
   }
   await walk(root, '');
   for (const [rel, f] of files) {
     const m = prev[rel];
     try {
-      f.hash = m && m.size === f.size && m.mtimeMs === f.mtimeMs ? m.hash : await hashFile(path.join(root, ...rel.split('/')));
+      f.hash = m && m.size === f.size && m.mtimeMs === f.mtimeMs ? m.hash : await hashFile(path.join(root, ...f.local.split('/')));
     } catch {
       files.delete(rel); // deleted while scanning: the next pass sees it gone
     }
@@ -165,9 +235,12 @@ function folderOfMove(from, to) {
  *   manifest[rel] = { etag, hash }   remote: Map(rel -> {etag, kind, hash?})   local: Map(rel -> {hash, kind, readonly})
  *
  * Renames are recognised first (same content under a new path) so they move
- * instead of being deleted and re-created. Returns a list of actions.
+ * instead of being deleted and re-created. Read-only paths (index.md, projects
+ * the user can only read: `readonly(rel)`) only ever follow the cloud.
+ * Returns a list of actions.
  */
-function planSync({ manifest, remote, local, caseInsensitive = false, rejected = new Map() }) {
+function planSync({ manifest, remote, local, caseInsensitive = false, rejected = new Map(), readonly = () => false }) {
+  const fixed = (rel) => isIndexRel(rel) || readonly(rel);
   const actions = [];
   const done = new Set();
   const M = manifest;
@@ -181,7 +254,7 @@ function planSync({ manifest, remote, local, caseInsensitive = false, rejected =
   }
 
   // Moved on disk (Obsidian rename/move): same bytes, new path; cloud copy untouched.
-  const goneLocal = Object.keys(M).filter((r) => !isIndexRel(r) && !done.has(r) && !local.has(r) && remote.get(r)?.etag === M[r].etag);
+  const goneLocal = Object.keys(M).filter((r) => !fixed(r) && !done.has(r) && !local.has(r) && remote.get(r)?.etag === M[r].etag);
   const newLocal = [...local.keys()].filter((r) => !M[r] && !remote.has(r) && !local.get(r).readonly && !done.has(r));
   const moves = uniquePairs(goneLocal, newLocal, (r) => M[r].hash, (r) => local.get(r).hash);
   // A whole folder renamed becomes one server move.
@@ -213,12 +286,12 @@ function planSync({ manifest, remote, local, caseInsensitive = false, rejected =
     const l = local.get(rel);
     const kind = (r ?? l ?? m).kind;
 
-    if (isIndexRel(rel)) {
-      // Generated by the server: the disk copy only ever follows the cloud.
+    if (fixed(rel)) {
+      // Generated by the server, or read-only for this user: the disk copy only ever follows the cloud.
       if (r) {
         if (!l || !m || m.etag !== r.etag || l.hash !== m.hash) actions.push({ type: 'pull', rel, kind, readonly: true });
       } else if (l) {
-        actions.push(m ? { type: 'trashLocal', rel } : { type: 'unsynced', rel, reason: REASONS.index });
+        actions.push(m ? { type: 'trashLocal', rel } : { type: 'unsynced', rel, reason: isIndexRel(rel) ? REASONS.index : REASONS.readonly });
       } else if (m) actions.push({ type: 'forget', rel });
       continue;
     }
@@ -279,6 +352,7 @@ class Requeue extends Error {}
  * The sync engine for one user and one folder.
  *
  * mirror: { snapshot(), sync(), readText(rel), readBlob(rel), putText(rel, text, opts), putBlob(rel, buf, opts), remove(rel), move(from, to) }
+ * layout: which projects sync and where they sit on disk (see PLAIN_LAYOUT).
  * trash(abs): moves a file or folder to the OS trash (recoverable).
  * onEvent({type, ...}): pushed | deleted | moved | merged | conflict | changed | folders | status | confirm | notice
  */
@@ -289,6 +363,7 @@ class VaultSync {
     userId,
     server,
     mirror,
+    layout = {},
     trash,
     onEvent = () => {},
     remoteLabel = () => 'cloud',
@@ -299,7 +374,9 @@ class VaultSync {
     now = () => new Date(),
   }) {
     Object.assign(this, { root: path.resolve(root), stateDir, userId, server, mirror, trashFn: trash, onEvent, remoteLabel, caseInsensitive, debounceMs, maxWaitMs, fullEveryMs, now });
-    this.manifest = { version: 1, root: this.root, userId, files: {} };
+    this.layout = { ...PLAIN_LAYOUT, ...layout };
+    // folders: key -> local folder at the last pass, to notice a renamed team.
+    this.manifest = { version: 1, root: this.root, userId, files: {}, folders: {} };
     this.queue = Promise.resolve();
     this.queued = false;
     this.running = false;
@@ -387,22 +464,59 @@ class VaultSync {
     return { ...this.state };
   }
 
+  /** Where a cloud path (a project, a folder or a file) sits on disk. */
   abs(rel) {
-    const abs = path.resolve(this.root, ...rel.split('/'));
+    const abs = path.resolve(this.root, ...shownPath(rel, this.layout).split('/'));
     if (!abs.startsWith(this.root + path.sep)) throw new Error('Percorso non valido');
     return abs;
   }
 
+  covered(rel) {
+    return rel.includes('/') && this.layout.covers(projectOf(rel));
+  }
+
+  /** A project stopped syncing: forget what was synced, leave its folder on disk as it is. */
+  forgetProject(key) {
+    return this.enqueue(async () => {
+      for (const k of Object.keys(this.manifest.files)) if (projectOf(k) === key) delete this.manifest.files[k];
+      delete this.manifest.folders?.[key];
+      await this.saveManifest();
+    });
+  }
+
+  /** A team renamed (or a name clash resolved differently): its folder moves on disk, the manifest stays. */
+  async applyFolders() {
+    const prev = (this.manifest.folders ??= {});
+    for (const [key, folder] of this.layout.folders()) {
+      const was = prev[key];
+      if (was && was !== folder) {
+        const a = path.join(this.root, was);
+        const b = path.join(this.root, folder);
+        // Case-only renames on case-insensitive disks: `b` "exists" because it is `a`.
+        const sameEntry = this.caseInsensitive && was.toLowerCase() === folder.toLowerCase();
+        if ((await exists(a)) && (sameEntry || !(await exists(b)))) {
+          await fsp.rename(a, b);
+          this.emit({ type: 'notice', message: `La cartella «${was}» ora si chiama «${folder}»` });
+        }
+      }
+      prev[key] = folder;
+    }
+  }
+
   // ------------------------------------------- local ops requested by Lore UI
+  // Only for projects this vault covers: the others' folders are not touched.
   async mkdirLocal(rel) {
-    if (this.running) await fsp.mkdir(this.abs(rel), { recursive: true });
+    if (this.running && this.layout.covers(projectOf(rel))) await fsp.mkdir(this.abs(rel), { recursive: true });
   }
 
   /** Lore renamed/moved something in the cloud: move it on disk too, keeping Obsidian's tabs and history. */
-  renameLocal(from, to) {
-    if (!this.running) return Promise.resolve();
+  // `fromAbs`: where `from` was on disk, resolved before the cloud move (a renamed
+  // project's old key no longer maps to its folder once the move is done).
+  renameLocal(from, to, fromAbs = null) {
+    // A renamed project is no longer mirrored under its old key: the new one decides.
+    if (!this.running || !(this.layout.covers(projectOf(from)) || this.layout.covers(projectOf(to)))) return Promise.resolve();
     return this.enqueue(async () => {
-      const a = this.abs(from);
+      const a = fromAbs ?? this.abs(from);
       const b = this.abs(to);
       if (!(await exists(a)) || (await exists(b))) return;
       await fsp.mkdir(path.dirname(b), { recursive: true });
@@ -420,7 +534,7 @@ class VaultSync {
 
   /** Lore deleted a folder in the cloud: send the local folder to the trash as a whole. */
   trashLocalFolder(rel) {
-    if (!this.running) return Promise.resolve();
+    if (!this.running || !this.layout.covers(projectOf(rel))) return Promise.resolve();
     return this.enqueue(async () => {
       const a = this.abs(rel);
       if (await exists(a)) await this.trash(a);
@@ -495,7 +609,7 @@ class VaultSync {
     try {
       const m = JSON.parse(await fsp.readFile(this.manifestPath, 'utf8'));
       // Another folder (or user) means a fresh start: the old state describes a different disk.
-      if (m.version === 1 && m.root === this.root && m.userId === this.userId) this.manifest = m;
+      if (m.version === 1 && m.root === this.root && m.userId === this.userId) this.manifest = { folders: {}, ...m };
     } catch {
       /* first sync */
     }
@@ -594,20 +708,26 @@ class VaultSync {
       return this.setState('error', { error: `Cartella della copia locale non trovata: ${this.root}` });
     }
     this.setState('syncing');
-    const scan = await scanVault(this.root, this.manifest.files);
-    const remote = this.mirror.snapshot();
+    await this.applyFolders();
+    const scan = await scanVault(this.root, this.manifest.files, this.layout);
+    // Only the projects covered now take part: the others (not selected, not loaded yet)
+    // keep their manifest entries untouched and are never read as deleted on either side.
+    const remote = new Map([...this.mirror.snapshot()].filter(([rel]) => this.covered(rel)));
+    const manifest = Object.fromEntries(Object.entries(this.manifest.files).filter(([rel]) => this.covered(rel)));
     // A refused file stays refused until its content changes.
     for (const [rel, hash] of this.rejected) if (scan.files.get(rel)?.hash !== hash) this.rejected.delete(rel);
-    let actions = planSync({ manifest: this.manifest.files, remote, local: scan.files, caseInsensitive: this.caseInsensitive, rejected: this.rejected });
+    const readonly = (rel) => this.layout.readonly(projectOf(rel));
+    let actions = planSync({ manifest, remote, local: scan.files, caseInsensitive: this.caseInsensitive, rejected: this.rejected, readonly });
 
+    const shown = (rel) => shownPath(rel, this.layout);
     const unsynced = [...scan.unsynced];
-    for (const [rel] of this.rejected) unsynced.push({ path: rel, reason: this.rejectedReasons.get(rel) ?? 'Rifiutato dal server' });
-    for (const a of actions.filter((a) => a.type === 'unsynced')) unsynced.push({ path: a.rel, reason: a.reason });
+    for (const [rel] of this.rejected) unsynced.push({ path: shown(rel), reason: this.rejectedReasons.get(rel) ?? 'Rifiutato dal server' });
+    for (const a of actions.filter((a) => a.type === 'unsynced')) unsynced.push({ path: shown(a.rel), reason: a.reason });
     actions = actions.filter((a) => a.type !== 'unsynced');
 
     // Mass-delete guard: many files gone from disk at once is more often an accident than intent.
     const deletes = actions.filter((a) => a.type === 'deleteRemote');
-    const tracked = Object.keys(this.manifest.files).length;
+    const tracked = Object.keys(manifest).length;
     let confirm = null;
     if (deletes.length > MASS_DELETE_COUNT || (tracked >= 10 && deletes.length / tracked > MASS_DELETE_RATIO)) {
       if (this.decision === 'restore') actions = actions.map((a) => (a.type === 'deleteRemote' ? { ...a, type: 'pull', kind: remote.get(a.rel)?.kind } : a));
@@ -649,7 +769,7 @@ class VaultSync {
           if (l) {
             this.rejected.set(a.rel, l.hash);
             this.rejectedReasons.set(a.rel, err.message);
-            unsynced.push({ path: a.rel, reason: err.message });
+            unsynced.push({ path: shown(a.rel), reason: err.message });
           }
         } else {
           this.state.error = `${a.rel ?? a.from}: ${err.message ?? err}`;
@@ -661,7 +781,8 @@ class VaultSync {
     // Empty folders on disk are Lore's local folders (object storage has none).
     const withFiles = new Set();
     for (const rel of [...scan.files.keys(), ...scan.unsynced.map((u) => u.path)]) for (let p = parentOf(rel); p; p = parentOf(p)) withFiles.add(p);
-    this.emit({ type: 'folders', dirs: [...scan.dirs].filter((d) => !withFiles.has(d) && isDirSync(this.abs(d))) });
+    // `covered`: the empty folders of other projects are not this vault's to report.
+    this.emit({ type: 'folders', dirs: [...scan.dirs].filter((d) => !withFiles.has(d) && isDirSync(this.abs(d))), covered: (rel) => this.covered(`${rel}/x`) });
 
     await this.saveManifest();
     await this.gcBases();
@@ -695,7 +816,8 @@ class VaultSync {
       case 'pull': {
         await this.assertUnchanged(a.rel, l);
         if (a.readonly && l && M[a.rel] && l.hash !== M[a.rel].hash) {
-          this.emit({ type: 'notice', message: `${a.rel} è generato automaticamente: la modifica locale è stata annullata` });
+          const why = isIndexRel(a.rel) ? 'è generato automaticamente' : 'è in un progetto in sola lettura';
+          this.emit({ type: 'notice', message: `${shownPath(a.rel, this.layout)} ${why}: la modifica locale è stata annullata` });
         }
         if (a.kind === 'md') {
           const { content, etag } = await this.mirror.readText(a.rel);
@@ -850,6 +972,9 @@ class VaultSync {
   }
 }
 
+/** A cloud path as it sits in the vault (projects are folders; a bare key is the project's folder). */
+const shownPath = (rel, layout) => (rel.includes('/') ? swapProject(rel, layout.folderOf) : layout.folderOf(rel));
+
 async function exists(p) {
   try {
     await fsp.access(p);
@@ -867,4 +992,4 @@ function isDirSync(abs) {
   }
 }
 
-module.exports = { VaultSync, classify, scanVault, planSync, conflictName, kindOf, isIndexRel, REASONS };
+module.exports = { VaultSync, classify, scanVault, planSync, folderNames, conflictName, kindOf, isIndexRel, REASONS, PLAIN_LAYOUT };

@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('lore', {
   vaultConfirm: call('vault:confirm'),
   vaultReveal: call('vault:reveal'),
   vaultSetLinkFormat: call('vault:setLinkFormat'),
+  vaultProjects: call('vault:projects'),
+  vaultSetProject: call('vault:setProject'),
   obsidianStatus: call('obsidian:status'),
   openInObsidian: call('obsidian:open'),
   launchObsidian: call('obsidian:launch'),

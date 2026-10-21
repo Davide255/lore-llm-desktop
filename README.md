@@ -44,6 +44,11 @@ background). *Apri in Obsidian* opens the current note; *Editor predefinito* can
   **three-way merged** (`electron/merge.cjs`). Overlapping edits keep yours in the file and save the cloud's as
   `name (conflitto … ).md`, with an entry in Attività.
 - Renames and folder moves are recognised (same content, new path) and become server moves, in both directions.
+- **Which projects**: all of your own projects by default (new ones too); team projects when you switch them on,
+  in folders named `Project (Team)` (a clash gets ` (2)`; renaming the team moves the folder). Each project
+  is loaded before it takes part, so a project still loading or switched off is never read as deleted on
+  either side. Switching one off forgets its sync state and leaves its folder on disk. Projects where you are
+  a viewer are written read-only and local edits are reverted.
 - `index.md` is written read-only and any local edit is reverted. Files that can't sync (outside a project,
   other types, too large) stay local and are listed in the settings page.
 - Cloud deletions go to the OS trash. If many files vanish locally at once, sync pauses and asks.

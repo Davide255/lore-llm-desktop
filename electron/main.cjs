@@ -13,7 +13,7 @@ const { API_URL, request, requestRaw } = require('./api.cjs');
 const { toAgent, toPatch, applyAudit, refOf } = require('./agents.cjs');
 const { createMirror } = require('./mirror.cjs');
 const { scoped, teamOf, projectOf, checkProjectName, canWrite } = require('./spaces.cjs');
-const { VaultSync, scanVault, planSync, kindOf } = require('./vault.cjs');
+const { VaultSync, scanVault, planSync, folderNames, kindOf } = require('./vault.cjs');
 const obsidian = require('./obsidian.cjs');
 
 const isMac = process.platform === 'darwin';
@@ -465,24 +465,66 @@ const syncDir = (userId) => path.join(app.getPath('userData'), 'sync', userId);
 const defaultVaultRoot = () => (MAS ? null : path.join(app.getPath('documents'), 'Lore LLM'));
 
 /**
- * The projects the local vault covers: the user's own. They are all loaded
- * before the vault plans, and the vault only ever sees them: a project that is
- * not loaded must never read as "deleted in the cloud".
+ * Which projects the local vault syncs: per-project opt-in, kept in the vault
+ * config as `projects: { exclude: [personal keys], include: [team keys] }`.
+ * The user's own projects are on unless switched off (new ones too); team
+ * projects are off unless switched on.
  */
-const vaultCovers = (key) => !teamOf(key);
-
-async function loadVaultProjects() {
-  if (!vault && !vaultStarting) return;
-  for (const key of mirror.summaries.keys()) if (vaultCovers(key) && !mirror.loaded.has(key)) await mirror.loadProject(key);
+function vaultSelected(key, cfg = vaultConfig(auth.user()?.id)) {
+  const p = cfg.projects ?? {};
+  return teamOf(key) ? (p.include ?? []).includes(key) : !(p.exclude ?? []).includes(key);
 }
 
-/** The mirror as the vault sees it: only the projects it covers, all of them loaded. */
+/**
+ * The vault's layout (vault.cjs): a project syncs when it is selected and its
+ * files are mirrored, so a project still loading never reads as "deleted";
+ * a project nobody listed yet (just made in Obsidian) is a new personal one.
+ * Team projects sit in `Name (Team)` folders.
+ */
+function vaultLayout() {
+  const names = () => {
+    const list = [...mirror.summaries.values()].map((s) => ({ key: s.key, name: s.name, team: s.team }));
+    // Projects only mirrored so far (renamed or created a moment ago) keep a stable folder too.
+    for (const key of mirror.loaded) {
+      if (mirror.summaries.has(key)) continue;
+      const team = teamOf(key) ? mirror.teams.find((t) => t.id === teamOf(key)) : null;
+      list.push({ key, name: key.split('@')[0], team: team ? { id: team.id, name: team.name } : null });
+    }
+    return folderNames(list);
+  };
+  let cache = { stamp: null, map: new Map(), rev: new Map() };
+  const map = () => {
+    const stamp = summaryStamp() + [...mirror.loaded].join('|');
+    if (cache.stamp !== stamp) {
+      const m = names();
+      cache = { stamp, map: m, rev: new Map([...m].map(([k, f]) => [f, k])) };
+    }
+    return cache;
+  };
+  const covers = (key) => {
+    if (!mirror.summaries.has(key) && !mirror.loaded.has(key)) return !teamOf(key) && vaultSelected(key);
+    return vaultSelected(key) && mirror.loaded.has(key);
+  };
+  return {
+    folderOf: (key) => map().map.get(key) ?? key,
+    keyOf: (folder) => map().rev.get(folder) ?? folder,
+    covers,
+    readonly: (key) => !canWrite(accessOf(key)),
+    folders: () => new Map([...map().map].filter(([key]) => covers(key))),
+  };
+}
+
+/** The selected projects get loaded: the vault waits for them before they take part. */
+async function loadVaultProjects() {
+  const u = auth.user();
+  if (!u || (!vault && !vaultStarting)) return;
+  const cfg = vaultConfig(u.id);
+  for (const key of mirror.summaries.keys()) if (vaultSelected(key, cfg) && !mirror.loaded.has(key)) await mirror.loadProject(key).catch(() => {});
+}
+
+/** The mirror as the vault sees it: after a refresh, newly selected or newly created projects load too. */
 const vaultMirror = {
-  snapshot() {
-    const out = new Map();
-    for (const [rel, v] of mirror.snapshot()) if (rel.includes('/') && vaultCovers(projectOf(rel)) && mirror.loaded.has(projectOf(rel))) out.set(rel, v);
-    return out;
-  },
+  snapshot: () => mirror.snapshot(),
   sync: async () => {
     await mirror.sync();
     await loadVaultProjects();
@@ -501,17 +543,25 @@ function releaseAccess() {
 }
 const serverId = () => new URL(API_URL).host;
 
+// Read on every scan (which projects sync): kept in memory, refreshed when saved.
+let configCache = { userId: null, cfg: null };
 function vaultConfig(userId) {
+  if (!userId) return { enabled: false, root: null, linkFormat: 'markdown' };
+  if (configCache.userId === userId) return configCache.cfg;
+  let cfg;
   try {
-    return { linkFormat: 'markdown', ...JSON.parse(fs.readFileSync(path.join(syncDir(userId), 'config.json'), 'utf8')) };
+    cfg = { linkFormat: 'markdown', ...JSON.parse(fs.readFileSync(path.join(syncDir(userId), 'config.json'), 'utf8')) };
   } catch {
-    return { enabled: false, root: null, linkFormat: 'markdown' };
+    cfg = { enabled: false, root: null, linkFormat: 'markdown' };
   }
+  configCache = { userId, cfg };
+  return cfg;
 }
 
 async function saveVaultConfig(userId, cfg) {
   await fsp.mkdir(syncDir(userId), { recursive: true });
   await fsp.writeFile(path.join(syncDir(userId), 'config.json'), JSON.stringify(cfg, null, 2));
+  configCache = { userId, cfg: { linkFormat: 'markdown', ...cfg } };
 }
 
 function vaultStatus() {
@@ -535,18 +585,20 @@ async function startVault() {
     if (auth.user()?.id !== u.id) return;
     releaseAccess();
     if (MAS && cfg.bookmark) releaseVaultAccess = app.startAccessingSecurityScopedResource(cfg.bookmark);
-    // Lore's local empty folders exist on disk too.
-    if (fs.existsSync(cfg.root)) for (const f of state.folders) await fsp.mkdir(path.join(cfg.root, ...f.split('/')), { recursive: true }).catch(() => {});
+    const layout = vaultLayout();
     vault = new VaultSync({
       root: cfg.root,
       stateDir: syncDir(u.id),
       userId: u.id,
       server: serverId(),
       mirror: vaultMirror,
+      layout,
       trash: (abs) => shell.trashItem(abs),
       onEvent: onVaultEvent,
-      remoteLabel: (rel) => (authorOf(rel) === 'agent' ? agentRef(rel)?.name ?? 'agente' : 'cloud'),
+      remoteLabel: (rel) => (authorOf(rel) === 'agent' ? agentRef(rel)?.name ?? 'agente' : authorOf(rel) === 'teammate' ? 'collaboratore' : 'cloud'),
     });
+    // Lore's local empty folders exist on disk too.
+    if (fs.existsSync(cfg.root)) for (const f of state.folders) if (layout.covers(projectOf(f))) await fsp.mkdir(vault.abs(f), { recursive: true }).catch(() => {});
     await vault.start();
   })().finally(() => {
     vaultStarting = null;
@@ -602,7 +654,8 @@ function onVaultEvent(ev) {
       send('kb:changed', { paths: ev.paths, external: true, source: 'obsidian' });
       break;
     case 'folders': {
-      const next = [...ev.dirs].sort();
+      // Empty folders of projects the vault doesn't cover stay as Lore knows them.
+      const next = [...ev.dirs, ...state.folders.filter((f) => !ev.covered(f))].sort();
       if (JSON.stringify(next) !== JSON.stringify([...state.folders].sort())) {
         state.folders = next;
         saveState();
@@ -806,6 +859,7 @@ handle('kb:rename', async (fromRel, toRel) => {
   if (mirror.has(toRel) || filesUnder(toRel).length || state.folders.includes(toRel)) throw new Error('Esiste già un elemento con questo nome');
   const moved = mirror.has(fromRel) ? [fromRel] : filesUnder(fromRel);
   const mine = new Set(moved.filter((k) => authorOf(k) === 'you'));
+  const fromAbs = vault?.running ? vault.abs(fromRel) : null;
   // The mirror carries contents over, so the move doesn't look like an agent edit.
   if (moved.length) await mirror.move(fromRel, toRel);
   state.folders = state.folders.map((f) => (under(f, fromRel) ? toRel + f.slice(fromRel.length) : f));
@@ -815,7 +869,7 @@ handle('kb:rename', async (fromRel, toRel) => {
     if (mine.has(k) && mirror.files.has(nk)) state.authors[nk] = mirror.files.get(nk).etag;
   }
   saveState();
-  await vault?.renameLocal(fromRel, toRel);
+  await vault?.renameLocal(fromRel, toRel, fromAbs);
   vault?.kick();
   return true;
 });
@@ -960,7 +1014,9 @@ handle('vault:preview', async (root) => {
   if (!u) throw new Error('Accesso richiesto');
   await ensurePrimed();
   if (!root && !defaultVaultRoot()) return { ok: false, root: '', error: 'Scegli una cartella per la copia locale.' };
-  for (const key of mirror.summaries.keys()) if (vaultCovers(key)) await mirror.loadProject(key);
+  const cfg = vaultConfig(u.id);
+  for (const key of mirror.summaries.keys()) if (vaultSelected(key, cfg)) await mirror.loadProject(key);
+  const layout = vaultLayout();
   const abs = path.resolve(root || defaultVaultRoot());
   const exists = fs.existsSync(abs);
   let marker = null;
@@ -973,8 +1029,10 @@ handle('vault:preview', async (root) => {
     return { ok: false, root: abs, error: 'Questa cartella è la copia locale di un altro account: scegline un\'altra.' };
   }
   const visible = exists ? fs.readdirSync(abs).filter((n) => !n.startsWith('.')) : [];
-  const scan = visible.length ? await scanVault(abs, {}) : { files: new Map(), unsynced: [] };
-  const actions = planSync({ manifest: {}, remote: vaultMirror.snapshot(), local: scan.files, caseInsensitive: process.platform !== 'linux' });
+  const scan = visible.length ? await scanVault(abs, {}, layout) : { files: new Map(), unsynced: [] };
+  const remote = new Map([...mirror.snapshot()].filter(([rel]) => rel.includes('/') && layout.covers(projectOf(rel))));
+  const readonly = (rel) => layout.readonly(projectOf(rel));
+  const actions = planSync({ manifest: {}, remote, local: scan.files, caseInsensitive: process.platform !== 'linux', readonly });
   const count = (type) => actions.filter((a) => a.type === type).length;
   return {
     ok: true,
@@ -1001,7 +1059,7 @@ handle('vault:enable', async ({ root, linkFormat = 'markdown' } = {}) => {
   if (MAS && !bookmark) throw new Error('Scegli di nuovo la cartella con «Scegli…» per darle accesso');
   await fsp.mkdir(abs, { recursive: true });
   await obsidian.writeDefaultConfig(abs, { linkFormat });
-  await saveVaultConfig(u.id, { enabled: true, root: abs, linkFormat, ...(bookmark ? { bookmark } : {}) });
+  await saveVaultConfig(u.id, { enabled: true, root: abs, linkFormat, ...(bookmark ? { bookmark } : {}), ...(prev.projects ? { projects: prev.projects } : {}) });
   await startVault();
   return vaultStatus();
 });
@@ -1053,6 +1111,42 @@ handle('vault:setLinkFormat', async (linkFormat) => {
   await saveVaultConfig(u.id, { ...cfg, linkFormat });
   if (cfg.root && fs.existsSync(cfg.root)) await obsidian.setLinkFormat(cfg.root, linkFormat);
   return vaultStatus();
+});
+
+// Which projects the local copy holds: the user's own by default, team projects on request.
+handle('vault:projects', async () => {
+  const u = auth.user();
+  if (!u) return [];
+  await ensurePrimed();
+  const layout = vaultLayout();
+  return [...mirror.summaries.values()]
+    .map((s) => ({ key: s.key, name: s.name, team: s.team, access: s.access, selected: vaultSelected(s.key), folder: layout.folderOf(s.key) }))
+    .sort((a, b) => (!a.team === !b.team ? 0 : a.team ? 1 : -1) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
+});
+
+handle('vault:setProject', async (key, on) => {
+  const u = auth.user();
+  if (!u) throw new Error('Accesso richiesto');
+  const cfg = vaultConfig(u.id);
+  const p = { exclude: [...(cfg.projects?.exclude ?? [])], include: [...(cfg.projects?.include ?? [])] };
+  const list = teamOf(key) ? p.include : p.exclude;
+  const want = teamOf(key) ? on : !on; // personal projects are listed when switched off
+  const i = list.indexOf(key);
+  if (want && i === -1) list.push(key);
+  if (!want && i !== -1) list.splice(i, 1);
+  await saveVaultConfig(u.id, { ...cfg, projects: p });
+  if (vault) {
+    if (on) {
+      // Loaded first, then merged by the usual planner.
+      await mirror.loadProject(key);
+      vault.kick();
+    } else {
+      // The local folder stays as it is; it just stops syncing.
+      await vault.forgetProject(key);
+      send('vault:notice', { message: `«${vault.abs(key).split(path.sep).pop()}» non è più sincronizzato: la cartella resta sul computer` });
+    }
+  }
+  return true;
 });
 
 handle('obsidian:status', () => {

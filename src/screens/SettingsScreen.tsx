@@ -4,7 +4,7 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp, type SettingsSection } from '../state/app';
 import { countFiles, projects, relTime } from '../kb/paths';
 import { lore } from '../kb/bridge';
-import type { Agent, AgentKind, NewAgent, Permission, VaultStatus } from '../kb/types';
+import type { Agent, AgentKind, NewAgent, Permission, VaultProject, VaultStatus } from '../kb/types';
 import { AGENT_KIND_LIST, AGENT_KINDS } from '../kb/agents';
 import { AgentAvatar } from '../ui/identity';
 import { Avatar, Btn, Card, Field, FieldLabel, Hover, Icon, IconWell, Kbd, Segmented, Toggle } from '../ui/primitives';
@@ -251,6 +251,8 @@ function ObsidianPrefs() {
 
       {on && v ? <VaultStatusCard v={v} /> : null}
 
+      {on && v ? <VaultProjectsCard /> : null}
+
       {on && v ? (
         <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           <View style={{ flex: 1 }}>
@@ -273,6 +275,53 @@ function ObsidianPrefs() {
 
       <DefaultEditorCard />
     </>
+  );
+}
+
+/** Per-project switches: your own projects sync by default, team projects when you turn them on. */
+function VaultProjectsCard() {
+  const app = useApp();
+  const [list, setList] = useState<VaultProject[] | null>(null);
+  const load = React.useCallback(() => lore.vaultProjects().then(setList).catch(() => {}), []);
+  useEffect(() => {
+    load();
+  }, [load, app.tree]);
+  const set = async (p: VaultProject, on: boolean) => {
+    setList((cur) => cur?.map((x) => (x.key === p.key ? { ...x, selected: on } : x)) ?? cur);
+    try {
+      await lore.vaultSetProject(p.key, on);
+    } catch (e) {
+      app.toast({ icon: 'error', text: e instanceof Error ? e.message : String(e) });
+    }
+    load();
+  };
+  if (!list?.length) return null;
+  return (
+    <Card style={{ gap: 4 }}>
+      <Text style={t(500, 14, 1.3)}>Progetti nella copia locale</Text>
+      <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3, marginBottom: 8 })}>
+        I tuoi progetti sono inclusi, quelli dei team li aggiungi tu. Togliere un progetto lascia la sua cartella sul computer: smette solo di sincronizzarsi.
+      </Text>
+      {list.map((p) => (
+        <View key={p.key} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 40, borderTopWidth: 1, borderColor: c.hair }}>
+          <Icon name={p.team ? 'groups' : 'folder_special'} size={17} color={p.team ? c.blueTint : c.purpleTint} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text numberOfLines={1} style={t(500, 13, 1.3)}>
+              {p.name}
+              {p.team ? <Text style={{ color: c.ink3, fontWeight: '400' }}>{` · ${p.team.name}`}</Text> : null}
+            </Text>
+            {p.selected && p.folder !== p.name ? (
+              <Text numberOfLines={1} style={{ fontFamily: font.mono, fontSize: 11.5, color: c.ink3, marginTop: 2 }}>
+                {p.folder}/{p.access === 'viewer' ? ' · sola lettura' : ''}
+              </Text>
+            ) : p.access === 'viewer' ? (
+              <Text style={t(400, 11.5, 1.3, { color: c.ink3, marginTop: 2 })}>Sola lettura</Text>
+            ) : null}
+          </View>
+          <Toggle value={p.selected} onChange={(next) => set(p, next)} />
+        </View>
+      ))}
+    </Card>
   );
 }
 

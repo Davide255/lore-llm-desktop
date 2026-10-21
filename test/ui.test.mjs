@@ -87,6 +87,11 @@ function fakeBridge({ signedIn, vault = false }) {
       confirm: null,
     },
     obsidian: { installed: true, registered: vault },
+    vaultProjects: [
+      { key: 'Athly', name: 'Athly', team: null, access: 'owner', selected: true, folder: 'Athly' },
+      { key: 'Archivio', name: 'Archivio', team: null, access: 'owner', selected: true, folder: 'Archivio' },
+      { key: 'Athly@T1', name: 'Athly', team: { id: 'T1', name: 'Squadra' }, access: 'viewer', selected: false, folder: 'Athly (Squadra)' },
+    ],
   };
   window.__calls = [];
   const rec = (name, fn) => async (...args) => {
@@ -132,6 +137,11 @@ function fakeBridge({ signedIn, vault = false }) {
     vaultConfirm: rec('vaultConfirm', async () => state.vault),
     vaultReveal: rec('vaultReveal', async () => true),
     vaultSetLinkFormat: rec('vaultSetLinkFormat', async (f) => (state.vault = { ...state.vault, linkFormat: f })),
+    vaultProjects: rec('vaultProjects', async () => state.vaultProjects),
+    vaultSetProject: rec('vaultSetProject', async (key, on) => {
+      state.vaultProjects = state.vaultProjects.map((p) => (p.key === key ? { ...p, selected: on } : p));
+      return true;
+    }),
     obsidianStatus: rec('obsidianStatus', async () => state.obsidian),
     openInObsidian: rec('openInObsidian', async () => true),
     launchObsidian: rec('launchObsidian', async () => {}),
@@ -362,6 +372,13 @@ test('obsidian: status, "Apri in Obsidian" and the default editor', async () => 
   await page.getByText('Obsidian', { exact: true }).first().click();
   await page.getByText('Sincronizzata', { exact: true }).waitFor();
   await page.getByText('Non sincronizzati (1)').waitFor();
+  // Per-project selection: the team project is off until switched on.
+  await page.getByText('Progetti nella copia locale').waitFor();
+  const switches = page.getByRole('switch');
+  const n = await switches.count();
+  await switches.nth(n - 1).click();
+  assert.deepEqual(await calls(page, 'vaultSetProject'), [['Athly@T1', true]]);
+  await page.getByText('Athly (Squadra)/ · sola lettura').waitFor();
   await shot(page, '10-vault-status');
   // Default editor → Obsidian: "Modifica" hands the note over.
   await page.getByText('Obsidian', { exact: true }).last().click();
