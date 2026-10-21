@@ -123,7 +123,7 @@ function Login() {
         ) : (
           <View style={{ gap: 10, marginTop: 8, width: 280 }}>
             <AppleButton onPress={() => app.signIn('apple')} />
-            <Btn icon="login" label="Accedi con Google" onPress={() => app.signIn('google')} height={44} style={{ width: '100%' }} />
+            <GoogleButton onPress={() => app.signIn('google')} />
           </View>
         )}
         <Text style={t(400, 12, 1, { color: c.ink3, marginTop: 4 })}>Server: {app.server}</Text>
@@ -147,6 +147,29 @@ function AppleButton({ onPress }: { onPress: () => void }) {
         />
       </svg>
       <Text style={t(600, 14.5, 1, { color: '#000' })}>Accedi con Apple</Text>
+    </Hover>
+  );
+}
+
+// Same shape as the Btn "ghost" variant, with the Gemini sparkle in place of an icon-font glyph.
+function GoogleButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Hover
+      onPress={onPress}
+      accessibilityLabel="Accedi con Google"
+      style={({ hovered, pressed }) => ({ height: 44, borderRadius: radius.md, backgroundColor: hovered || pressed ? c.fill12 : c.fill07, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 })}
+    >
+      <svg width={17} height={17} viewBox="0 0 24 24" aria-hidden="true">
+        <defs>
+          <linearGradient id="gemini-sparkle" x1="0" y1="24" x2="24" y2="0" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stopColor="#1c7dff" />
+            <stop offset=".55" stopColor="#6c8bff" />
+            <stop offset="1" stopColor="#d96570" />
+          </linearGradient>
+        </defs>
+        <path fill="url(#gemini-sparkle)" d="M12 0C12 6.627 6.627 12 0 12c6.627 0 12 5.373 12 12 0-6.627 5.373-12 12-12-6.627 0-12-5.373-12-12z" />
+      </svg>
+      <Text style={t(600, 14.5, 1, { color: c.ink })}>Accedi con Google</Text>
     </Hover>
   );
 }
