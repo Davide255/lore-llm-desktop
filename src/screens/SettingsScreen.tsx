@@ -3,21 +3,23 @@ import { ScrollView, Text, View } from 'react-native';
 import { c, font, radius, t, web } from '../theme';
 import { useApp, type SettingsSection } from '../state/app';
 import { allFiles, projects, relTime } from '../kb/paths';
-import { lore } from '../kb/bridge';
+import { isWeb, lore } from '../kb/bridge';
 import type { Agent, AgentKind, NewAgent, Permission, VaultStatus } from '../kb/types';
 import { AGENT_KIND_LIST, AGENT_KINDS } from '../kb/agents';
 import { AgentAvatar } from '../ui/identity';
 import { Avatar, Btn, Card, Field, FieldLabel, Hover, Icon, IconWell, Kbd, Segmented, Toggle } from '../ui/primitives';
 import { DialogFooter, DialogFrame, DialogTitle, anchorBelow } from '../ui/overlays';
 
-const SECTIONS: { key: SettingsSection; icon: string; label: string }[] = [
+const SECTIONS = ([
   { key: 'account', icon: 'account_circle', label: 'Account' },
   { key: 'general', icon: 'tune', label: 'Generale' },
   { key: 'editor', icon: 'edit_note', label: 'Editor' },
   { key: 'obsidian', icon: 'hub', label: 'Obsidian' },
   { key: 'agents', icon: 'smart_toy', label: 'Agenti' },
   { key: 'shortcuts', icon: 'keyboard', label: 'Scorciatoie' },
-];
+] as { key: SettingsSection; icon: string; label: string }[])
+  // A browser has no folder to keep in sync for Obsidian.
+  .filter((s) => !(isWeb && s.key === 'obsidian'));
 
 export function SettingsScreen({ section = 'general' }: { section?: SettingsSection }) {
   const app = useApp();
@@ -159,7 +161,7 @@ function EditorPrefs() {
         </View>
         <Toggle value={app.prefs.syncScroll ?? true} onChange={(v) => app.setPrefs({ syncScroll: v })} />
       </Card>
-      <DefaultEditorCard />
+      {isWeb ? null : <DefaultEditorCard />}
     </>
   );
 }

@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "concurrently -k -n vite,electron -c magenta,blue \"vite\" \"wait-on tcp:5173 && cross-env LORE_DEV_URL=http://localhost:5173 electron .\"",
     "build": "tsc --noEmit && vite build",
+    "dev:web": "vite",
+    "build:web": "tsc --noEmit && vite build --mode web",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
     "test": "node --test src/kb/*.test.ts electron/*.test.cjs",

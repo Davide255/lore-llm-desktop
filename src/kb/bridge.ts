@@ -1,4 +1,5 @@
 import type { LoreBridge } from './types';
+import { createWebBridge } from '../web/bridge';
 
 declare global {
   interface Window {
@@ -6,7 +7,8 @@ declare global {
   }
 }
 
-export const lore: LoreBridge = (() => {
-  if (typeof window !== 'undefined' && window.lore) return window.lore;
-  throw new Error('Lore bridge not available — run the app through Electron (npm run dev).');
-})();
+/** True in a plain browser tab (GitHub Pages build), false inside Electron. */
+export const isWeb = typeof window !== 'undefined' && !window.lore;
+
+// Electron's preload provides `window.lore`; in a browser the page talks to the Worker itself.
+export const lore: LoreBridge = isWeb ? createWebBridge() : window.lore!;

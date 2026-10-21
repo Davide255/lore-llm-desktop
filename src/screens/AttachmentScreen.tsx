@@ -4,10 +4,11 @@ import { c, font, radius, t } from '../theme';
 import { useApp } from '../state/app';
 import { openItemMenu } from '../state/actions';
 import { lore } from '../kb/bridge';
-import { assetUrl, backlinks as linksTo, isImage } from '../kb/links';
+import { backlinks as linksTo, isImage } from '../kb/links';
 import { basename, filePaths, findNode, formatSize, longDate, relTime } from '../kb/paths';
 import { Btn, Hover, Icon, IconBtn } from '../ui/primitives';
 import { anchorBelow } from '../ui/overlays';
+import { useAssetUrl } from '../ui/Markdown';
 import { EmptyState, FileBar, Rail, RailHeading, useWidth } from './common';
 
 /** An image or PDF stored in the knowledge base (usually pasted in Obsidian). */
@@ -17,6 +18,7 @@ export function AttachmentScreen({ path }: { path: string }) {
   const { width, onLayout } = useWidth();
   const [usedBy, setUsedBy] = useState<string[]>([]);
   const [failed, setFailed] = useState(false);
+  const src = useAssetUrl(path, () => setFailed(true));
   const moreRef = useRef<View>(null);
   const image = isImage(path);
 
@@ -51,7 +53,7 @@ export function AttachmentScreen({ path }: { path: string }) {
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 40, alignItems: 'center' }}>
           {image && !failed ? (
             <img
-              src={assetUrl(path)}
+              src={src}
               alt={basename(path)}
               onError={() => setFailed(true)}
               style={{ maxWidth: '100%', maxHeight: '75vh', borderRadius: radius.lg, background: c.cell, objectFit: 'contain' }}

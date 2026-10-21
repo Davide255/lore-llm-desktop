@@ -188,8 +188,8 @@ export interface AuthUser {
   provider?: SignInProvider;
 }
 
-/** The bridge the Electron preload exposes. A react-native-windows/macos
- *  target would implement this same interface with a native module. */
+/** The bridge the Electron preload exposes (src/web/bridge.ts implements it for the browser).
+ *  A react-native-windows/macos target would implement this same interface with a native module. */
 export interface LoreBridge {
   tree(fresh?: boolean): Promise<TreeNode[]>;
   read(path: string): Promise<FileContent>;
@@ -227,6 +227,8 @@ export interface LoreBridge {
   launchObsidian(): Promise<void>;
   /** Opens an attachment in the system viewer. */
   openAttachment(path: string): Promise<string>;
+  /** Browser build only: a URL the page can load an attachment from. Electron serves lore-asset:// instead. */
+  assetUrl?(path: string): Promise<string>;
   /** A lore:// link that arrived before the window was ready. */
   takePendingLink(): Promise<{ path: string; heading?: string } | null>;
   /** Host of the Lore server the app talks to. */

@@ -1,8 +1,9 @@
-import React, { memo, useMemo, useState } from 'react';
+import React, { memo, useEffect, useMemo, useState } from 'react';
 import { Text, View, type TextStyle } from 'react-native';
 import { Lexer, Marked, type Token, type Tokens } from 'marked';
 import { c, font, radius, t, web } from '../theme';
 import { assetUrl, isImage, parseWikiLink, wikiLabel } from '../kb/links';
+import { lore } from '../kb/bridge';
 import { Icon } from './primitives';
 
 /** `[[Note#Heading|alias]]` and `![[image.png|300]]`, as Obsidian writes them. */
@@ -294,14 +295,33 @@ export function InlineMarkdown({ text, ...p }: { text: string } & Partial<Markdo
   return <Inline tokens={tokens} source={text} {...p} />;
 }
 
+/** Where an attachment loads from: lore-asset:// in Electron, a URL the web bridge downloads in a browser. */
+export function useAssetUrl(rel: string, onError: () => void): string | undefined {
+  const [url, setUrl] = useState(() => (lore.assetUrl ? undefined : assetUrl(rel)));
+  useEffect(() => {
+    if (!lore.assetUrl) return setUrl(assetUrl(rel));
+    let live = true;
+    setUrl(undefined);
+    lore.assetUrl(rel).then(
+      (u) => live && setUrl(u),
+      () => live && onError(),
+    );
+    return () => {
+      live = false;
+    };
+  }, [rel]);
+  return url;
+}
+
 /** An image attachment, served by the main process (from the vault or the cloud). */
 function AssetImage({ rel, alt, width }: { rel: string; alt?: string; width?: number }) {
   const [failed, setFailed] = useState(false);
+  const src = useAssetUrl(rel, () => setFailed(true));
   if (failed) return <Text {...({ dataSet: { asset: rel } } as object)} style={{ color: c.ink3 }}>🖼 {alt || rel}</Text>;
   return (
     <img
       data-asset={rel}
-      src={assetUrl(rel)}
+      src={src}
       alt={alt ?? ''}
       onError={() => setFailed(true)}
       style={{ display: 'block', maxWidth: '100%', width: width ? `${width}px` : undefined, height: 'auto', borderRadius: radius.md, margin: '6px 0' }}

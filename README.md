@@ -73,9 +73,34 @@ npm start          # run Electron on the built bundle
 npm test           # checklist, links, agents, mirror, merge, vault sync and Obsidian tests (Node ≥ 22.18; on older 22.x add --experimental-strip-types)
 npm run test:ui    # renderer in headless Chrome with a fake bridge (LORE_UI_SHOTS=<dir> saves screenshots)
 npm run dist       # installer via electron-builder (release/)
+npm run dev:web    # the same UI in a plain browser tab (http://localhost:5173), talking to the Worker directly
+npm run build:web  # static browser build in dist-web/ (what GitHub Pages serves)
 ```
 
 `LORE_USER_DATA=<dir>` runs the app with an isolated profile (handy for demos and tests).
+
+## Web version (GitHub Pages)
+
+The renderer also runs in a plain browser tab. Without Electron's `window.lore`, `src/kb/bridge.ts` uses
+`src/web/bridge.ts`, which does in the page what `electron/main.cjs` does behind IPC: Cognito login
+(PKCE with a full-page redirect back to the app, tokens in `localStorage`), the cloud mirror, activity
+and preferences (`localStorage`), polling `/v1/version` while the tab is visible, attachments as `blob:` URLs.
+`?open=Project/note.md` plays the part of `lore://open?path=…`.
+
+Not in the browser: the local vault and Obsidian (no folder to sync), Electron's window controls, and
+shortcuts the browser keeps for itself (e.g. Ctrl/⌘N, ⌘W).
+
+`.github/workflows/pages.yml` builds `dist-web/` and deploys it on every push to `main`. One-time setup:
+
+1. Repository *Settings → Pages → Source*: **GitHub Actions**.
+2. Worker (`lore-llm/wrangler.toml`): add the Pages origin, e.g. `ALLOWED_ORIGINS = "https://davide255.github.io"`
+   (origin only, no path), and redeploy.
+3. Cognito app client: add the app URL, e.g. `https://davide255.github.io/lore-llm-desktop/`, to *Allowed callback URLs*
+   (and `http://localhost:5173/` for `npm run dev:web`). The web build uses the desktop client unless the
+   `LORE_WEB_COGNITO_CLIENT_ID` Actions variable names another public client.
+
+The build reads `LORE_API_URL` and `LORE_COGNITO_DOMAIN` like the desktop app (Actions variables in CI);
+`LORE_WEB_REDIRECT_URI` pins the callback URL instead of deriving it from the page's location.
 
 ## Sign in with Google
 

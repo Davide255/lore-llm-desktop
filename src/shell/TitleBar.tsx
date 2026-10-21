@@ -2,6 +2,7 @@ import React from 'react';
 import { Text, View } from 'react-native';
 import { c, font, t, web } from '../theme';
 import { useApp, type Route } from '../state/app';
+import { isWeb } from '../kb/bridge';
 import { Hover, Icon, isMac } from '../ui/primitives';
 
 const SETTINGS_LABEL = { account: 'Account', general: 'Generale', editor: 'Editor', obsidian: 'Obsidian', agents: 'Agenti', shortcuts: 'Scorciatoie' } as const;
@@ -52,7 +53,7 @@ export function TitleBar() {
   return (
     <View
       style={[
-        { height: 44, flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: isMac ? 84 : 14, paddingRight: isMac ? 18 : 150, borderBottomWidth: 1, borderColor: c.hair, backgroundColor: c.titlebar },
+        { height: 44, flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: isMac && !isWeb ? 84 : 14, paddingRight: isMac || isWeb ? 18 : 150, borderBottomWidth: 1, borderColor: c.hair, backgroundColor: c.titlebar },
         web({ WebkitAppRegion: 'drag', userSelect: 'none' }),
       ]}
     >

@@ -1,0 +1,49 @@
+# Builds the browser version of the app (`npm run build:web`) and publishes it on GitHub Pages.
+# One-time setup: Settings → Pages → Source: GitHub Actions.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # The web build needs no Electron binary.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      # Optional overrides (Settings → Secrets and variables → Actions → Variables).
+      LORE_API_URL: ${{ vars.LORE_API_URL }}
+      LORE_COGNITO_DOMAIN: ${{ vars.LORE_COGNITO_DOMAIN }}
+      LORE_WEB_COGNITO_CLIENT_ID: ${{ vars.LORE_WEB_COGNITO_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --legacy-peer-deps
+      - run: npm run build:web
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
