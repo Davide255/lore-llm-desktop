@@ -32,6 +32,18 @@ cursors (`/v1/version`, one request: your space and each team's): open views ref
 open project lands in **Attività** with a side-by-side diff and *Ripristina*. Projects not opened only refresh
 their card.
 
+## Teams
+
+*Impostazioni → Team*: create a team, rename or delete it (only when it has no files left), see its members,
+change their role (**Proprietario**, **Editor**, **Sola lettura**), remove them or leave, and invite people by
+email. Invitations arrive in the app (a card on the Projects screen and in Settings) and are accepted there.
+
+A team's projects sit in the same list as yours, with the team's name next to them. In the main process they
+are addressed as `Name@<teamId>` (`electron/spaces.cjs`), which the HTTP layer turns into `?owner=t:<teamId>`.
+Where you are a viewer, everything reads and nothing edits (the server enforces it too). *Sposta in un team…*
+in a project's menu moves one of your projects into a team where you can write. Files changed by teammates
+show as *Un collaboratore* (the server doesn't record who yet). Agents still reach your own projects only.
+
 ## Obsidian
 
 *Impostazioni → Obsidian* turns on a **local copy** of the KB: a plain folder (default `~/Documents/Lore LLM`)

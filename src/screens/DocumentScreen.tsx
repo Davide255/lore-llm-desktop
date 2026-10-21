@@ -4,6 +4,7 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { openItemMenu } from '../state/actions';
 import { lore } from '../kb/bridge';
+import { canWrite } from '../kb/teams';
 import { basename, fileKind, filePaths, formatSize, longDate, projects, relTime, wordCount } from '../kb/paths';
 import { backlinks as linksTo, sameHeading } from '../kb/links';
 import { AuthorAvatar, authorName } from '../ui/identity';
@@ -17,6 +18,8 @@ export function DocumentScreen({ path }: { path: string }) {
   const { file, error } = useFile(path);
   const links = useLinkHandler(path);
   const readOnly = fileKind(path) === 'index';
+  // A team project where the user is a viewer: readable, never editable.
+  const viewer = !canWrite(app.accessOf(path));
   const { width, onLayout } = useWidth();
   const showRail = width > 980;
   const scrollRef = useRef<ScrollView>(null);
@@ -94,7 +97,7 @@ export function DocumentScreen({ path }: { path: string }) {
       <FileBar title={basename(path)} subtitle={subtitle}>
         {app.obsidianReady ? <IconBtn icon="open_in_new" title="Apri in Obsidian" onPress={() => app.openInObsidian(path)} /> : null}
         <IconBtn icon="ios_share" title="Copia link" onPress={() => app.ops.copyLink(path)} />
-        {readOnly ? (
+        {readOnly || viewer ? (
           <Btn icon="lock" label="Sola lettura" textColor={c.ink3} disabled style={{ opacity: 1 }} />
         ) : (
           <>
@@ -129,9 +132,9 @@ export function DocumentScreen({ path }: { path: string }) {
                 />
               </View>
             ) : (
-              <Hover onPress={() => !readOnly && app.editFile(path)} style={{ paddingVertical: 40, alignItems: 'center', gap: 8 }}>
+              <Hover onPress={() => !readOnly && !viewer && app.editFile(path)} style={{ paddingVertical: 40, alignItems: 'center', gap: 8 }}>
                 <Icon name="draft" size={28} color={c.ink3} />
-                <Text style={t(400, 14, 1.4, { color: c.ink3 })}>File vuoto{readOnly ? '' : ' — premi E per scrivere'}</Text>
+                <Text style={t(400, 14, 1.4, { color: c.ink3 })}>File vuoto{readOnly || viewer ? '' : ' — premi E per scrivere'}</Text>
               </Hover>
             )}
           </View>

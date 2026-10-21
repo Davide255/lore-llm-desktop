@@ -67,6 +67,7 @@ function onUser(user) {
   stopVault();
   releaseAccess();
   primed = false;
+  lastInvites = null;
   mirror.reset();
   writers = new Map();
   if (user && user.id !== state.userId) {
@@ -372,6 +373,8 @@ async function poll({ force = false } = {}) {
   polling = true;
   lastPollAt = Date.now();
   try {
+    // Invitations addressed to you show up while the window is in front (one request).
+    if (focused) await myInvites().catch(() => {});
     if (versionApi) {
       try {
         // One request: the cursors of the user's own space and of each team.
@@ -990,6 +993,124 @@ handle('audit:list', async (opts = {}) => {
     items: items.map((r) => ({ id: r.log_id, at: Date.parse(r.timestamp), agent: refOf(state.agentRefs, r.agent_id), action: r.action, path: r.target_path })),
     nextBefore: next_before,
   };
+});
+
+// --- teams and invites -------------------------------------------------------
+// A team's projects are reached with the file routes and ?owner=t:<id> (spaces.cjs).
+const teamPath = (id, ...rest) => ['/v1/teams', encodeURIComponent(id), ...rest.map(encodeURIComponent)].join('/');
+const toTeam = (t) => ({ id: t.id, name: t.name, role: t.role, createdAt: Date.parse(t.created_at) || 0 });
+const toInvite = (i) => ({ id: i.id, email: i.email, role: i.role, createdAt: Date.parse(i.created_at) || 0, expiresAt: Date.parse(i.expires_at) || 0 });
+
+/** Teams joined, left, created or deleted: the project list follows at once. */
+async function afterTeamsChanged() {
+  await mirror.syncSummaries();
+  await loadVaultProjects();
+  vault?.kick();
+  send('kb:changed', { paths: [], external: false });
+}
+
+handle('teams:list', async () => (await request('GET', '/v1/teams')).teams.map(toTeam));
+handle('teams:get', async (id) => toTeam((await request('GET', teamPath(id))).team));
+handle('teams:create', async (name) => {
+  const { team } = await request('POST', '/v1/teams', { body: { name } });
+  await afterTeamsChanged();
+  return toTeam(team);
+});
+handle('teams:rename', async (id, name) => {
+  await request('PATCH', teamPath(id), { body: { name } });
+  await afterTeamsChanged();
+  return true;
+});
+handle('teams:delete', async (id) => {
+  await request('DELETE', teamPath(id));
+  await afterTeamsChanged();
+  return true;
+});
+handle('teams:members', async (id) => {
+  const me = auth.user()?.id;
+  return (await request('GET', teamPath(id, 'members'))).members.map((m) => ({
+    userId: m.user_id,
+    role: m.role,
+    joinedAt: Date.parse(m.joined_at) || 0,
+    name: m.name ?? null,
+    email: m.email ?? null,
+    isYou: m.user_id === me,
+  }));
+});
+handle('teams:setRole', async (id, userId, role) => {
+  await request('PATCH', teamPath(id, 'members', userId), { body: { role } });
+  // Your own role changed: what you may do in its projects changes too.
+  if (userId === auth.user()?.id) await afterTeamsChanged();
+  return true;
+});
+// Removing someone, or yourself (leave): leaving takes the team's projects away from this app.
+handle('teams:removeMember', async (id, userId) => {
+  await request('DELETE', teamPath(id, 'members', userId));
+  if (userId === auth.user()?.id) await afterTeamsChanged();
+  return true;
+});
+handle('teams:invites', async (id) => (await request('GET', teamPath(id, 'invites'))).invites.map(toInvite));
+handle('teams:invite', async (id, email, role) => toInvite((await request('POST', teamPath(id, 'invites'), { body: { email, role } })).invite));
+handle('teams:revokeInvite', async (id, inviteId) => {
+  await request('DELETE', teamPath(id, 'invites', inviteId));
+  return true;
+});
+
+const toMyInvite = (i) => ({
+  id: i.id,
+  teamId: i.team_id,
+  teamName: i.team_name,
+  role: i.role,
+  invitedBy: i.invited_by?.name ?? i.invited_by?.email ?? null,
+  createdAt: Date.parse(i.created_at) || 0,
+  expiresAt: Date.parse(i.expires_at) || 0,
+});
+let lastInvites = null;
+async function myInvites() {
+  const invites = (await request('GET', '/v1/invites')).invites.map(toMyInvite);
+  const stamp = JSON.stringify(invites.map((i) => i.id));
+  if (lastInvites !== null && stamp !== lastInvites) send('invites:changed', invites);
+  lastInvites = stamp;
+  return invites;
+}
+handle('invites:mine', () => myInvites());
+handle('invites:answer', async (id, accept) => {
+  await request('POST', `/v1/invites/${encodeURIComponent(id)}/${accept ? 'accept' : 'decline'}`);
+  // Accepting brings the team's projects in right away.
+  if (accept) await afterTeamsChanged();
+  return myInvites();
+});
+
+// Personal project -> team (server-side copy + delete). It keeps its place in Lore and in the local copy.
+handle('projects:moveToTeam', async (key, teamId) => {
+  if (teamOf(key)) throw new Error('Il progetto è già di un team');
+  const team = mirror.teams.find((t) => t.id === teamId);
+  if (!team || !canWrite(team.role)) throw new Error('Puoi spostare progetti solo nei team in cui puoi scrivere');
+  await ensurePrimed();
+  const wasLoaded = mirror.loaded.has(key);
+  const synced = vaultSelected(key);
+  const next = `${key}@${teamId}`;
+  await request('POST', `/v1/projects/${encodeURIComponent(key)}/move-to-team`, { body: { team_id: teamId } });
+  // Same bytes under the new key: authorship, empty folders and the open list follow.
+  const rekey = (rel) => (under(rel, key) ? next + rel.slice(key.length) : rel);
+  state.authors = Object.fromEntries(Object.entries(state.authors).map(([rel, etag]) => [rekey(rel), etag]));
+  state.folders = state.folders.map(rekey);
+  state.openProjects = state.openProjects.map(rekey);
+  saveState();
+  // A project the local copy had keeps syncing there, now in its team folder.
+  const u = auth.user();
+  if (u && synced && vaultConfig(u.id).enabled) {
+    const cfg = vaultConfig(u.id);
+    const include = [...new Set([...(cfg.projects?.include ?? []), next])];
+    await saveVaultConfig(u.id, { ...cfg, projects: { exclude: cfg.projects?.exclude ?? [], include } });
+  }
+  mirror.forget(key);
+  await mirror.syncSummaries();
+  if (wasLoaded || synced) await mirror.loadProject(next).catch(() => {});
+  await resync();
+  vault?.kick();
+  send('kb:changed', { paths: [], external: false });
+  return next;
 });
 
 // --- local vault -------------------------------------------------------------

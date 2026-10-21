@@ -8,7 +8,7 @@ import { Btn, FilterPill, Hover, Icon, Pill } from '../ui/primitives';
 import { AuthorAvatar } from '../ui/identity';
 import { EmptyState } from './common';
 
-type Filter = 'all' | 'agent' | 'you';
+type Filter = 'all' | 'agent' | 'you' | 'teammate';
 
 function dayLabel(ms: number) {
   const d = new Date(ms);
@@ -58,6 +58,7 @@ export function ActivityScreen({ id }: { id?: string }) {
         <FilterPill label="Tutto" active={filter === 'all'} onPress={() => setFilter('all')} />
         <FilterPill label="Agenti" active={filter === 'agent'} onPress={() => setFilter('agent')} />
         <FilterPill label="Tu" active={filter === 'you'} onPress={() => setFilter('you')} />
+        {app.activity.some((a) => a.by === 'teammate') ? <FilterPill label="Team" active={filter === 'teammate'} onPress={() => setFilter('teammate')} /> : null}
       </View>
 
       {!list.length ? (

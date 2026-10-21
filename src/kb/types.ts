@@ -3,6 +3,46 @@ export type Author = 'you' | 'agent' | 'teammate';
 
 export type TeamRole = 'owner' | 'editor' | 'viewer';
 
+/** Roles an invitation can grant (owners are made by promoting a member). */
+export type InviteRole = Exclude<TeamRole, 'owner'>;
+
+export interface Team {
+  id: string;
+  name: string;
+  /** The signed-in user's role in the team. */
+  role: TeamRole;
+  createdAt: number;
+}
+
+export interface TeamMember {
+  userId: string;
+  role: TeamRole;
+  joinedAt: number;
+  name: string | null;
+  email: string | null;
+  isYou: boolean;
+}
+
+/** An invitation the team sent, still waiting for an answer. */
+export interface TeamInvite {
+  id: string;
+  email: string;
+  role: InviteRole;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/** An invitation addressed to the signed-in user. */
+export interface MyInvite {
+  id: string;
+  teamId: string;
+  teamName: string;
+  role: InviteRole;
+  invitedBy: string | null;
+  createdAt: number;
+  expiresAt: number;
+}
+
 export type AgentKind = 'claude' | 'codex';
 
 /** Identity snapshot of the agent behind a change. `kind` is null once the agent is revoked and unknown. */
@@ -246,6 +286,24 @@ export interface LoreBridge {
   updateAgent(id: string, patch: Partial<Pick<Agent, 'name' | 'kind' | 'permission' | 'scope'>>): Promise<boolean>;
   deleteAgent(id: string): Promise<boolean>;
   audit(opts?: { limit?: number; before?: number }): Promise<{ items: AuditItem[]; nextBefore: number | null }>;
+  teams(): Promise<Team[]>;
+  team(id: string): Promise<Team>;
+  createTeam(name: string): Promise<Team>;
+  renameTeam(id: string, name: string): Promise<boolean>;
+  /** Only when the team has no files left. */
+  deleteTeam(id: string): Promise<boolean>;
+  teamMembers(id: string): Promise<TeamMember[]>;
+  setMemberRole(id: string, userId: string, role: TeamRole): Promise<boolean>;
+  /** Removes a member, or the signed-in user (leave). */
+  removeMember(id: string, userId: string): Promise<boolean>;
+  teamInvites(id: string): Promise<TeamInvite[]>;
+  inviteToTeam(id: string, email: string, role: InviteRole): Promise<TeamInvite>;
+  revokeInvite(id: string, inviteId: string): Promise<boolean>;
+  myInvites(): Promise<MyInvite[]>;
+  /** Accept or decline; resolves to the invitations still pending. */
+  answerInvite(id: string, accept: boolean): Promise<MyInvite[]>;
+  /** Moves one of the user's own projects into a team; resolves to its new key. */
+  moveToTeam(key: string, teamId: string): Promise<string>;
   vaultStatus(): Promise<VaultStatus>;
   vaultChooseRoot(): Promise<string | null>;
   vaultPreview(root?: string): Promise<VaultPreview>;
@@ -282,6 +340,7 @@ export interface LoreBridge {
   onChanged(cb: (ev: ChangedEvent) => void): () => void;
   onActivity(cb: (ev: ActivityEvent) => void): () => void;
   onLoadProgress(cb: (ev: { done: number; total: number }) => void): () => void;
+  onInvites(cb: (invites: MyInvite[]) => void): () => void;
   onCloseRequested(cb: () => void): () => void;
   onVaultStatus(cb: (s: VaultStatus) => void): () => void;
   onVaultConflict(cb: (ev: { path: string; copy: string }) => void): () => void;

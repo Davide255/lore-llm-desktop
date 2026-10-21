@@ -4,15 +4,17 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp, type SettingsSection } from '../state/app';
 import { countFiles, projects, relTime } from '../kb/paths';
 import { lore } from '../kb/bridge';
-import type { Agent, AgentKind, NewAgent, Permission, VaultProject, VaultStatus } from '../kb/types';
+import type { Agent, AgentKind, InviteRole, NewAgent, Permission, Team, TeamInvite, TeamMember, TeamRole, VaultProject, VaultStatus } from '../kb/types';
+import { canManage, INVITE_ROLES, looksLikeEmail, ROLE_HINT, ROLE_LABEL, sortMembers } from '../kb/teams';
 import { AGENT_KIND_LIST, AGENT_KINDS } from '../kb/agents';
 import { AgentAvatar } from '../ui/identity';
-import { Avatar, Btn, Card, Field, FieldLabel, Hover, Icon, IconWell, Kbd, Segmented, Toggle } from '../ui/primitives';
+import { Avatar, Btn, Card, Field, FieldLabel, Hover, Icon, IconWell, Kbd, Segmented, Spinner, Toggle } from '../ui/primitives';
 import { DialogFooter, DialogFrame, DialogTitle, anchorBelow } from '../ui/overlays';
 
 const SECTIONS: { key: SettingsSection; icon: string; label: string }[] = [
   { key: 'account', icon: 'account_circle', label: 'Account' },
   { key: 'general', icon: 'tune', label: 'Generale' },
+  { key: 'team', icon: 'groups', label: 'Team' },
   { key: 'editor', icon: 'edit_note', label: 'Editor' },
   { key: 'obsidian', icon: 'hub', label: 'Obsidian' },
   { key: 'agents', icon: 'smart_toy', label: 'Agenti' },
@@ -40,7 +42,7 @@ export function SettingsScreen({ section = 'general' }: { section?: SettingsSect
         })}
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 34, paddingHorizontal: 44, gap: 22, maxWidth: 1000 }}>
-        {section === 'account' ? <Account /> : section === 'general' ? <General /> : section === 'editor' ? <EditorPrefs /> : section === 'obsidian' ? <ObsidianPrefs /> : section === 'agents' ? <Agents /> : <Shortcuts />}
+        {section === 'account' ? <Account /> : section === 'general' ? <General /> : section === 'team' ? <Teams /> : section === 'editor' ? <EditorPrefs /> : section === 'obsidian' ? <ObsidianPrefs /> : section === 'agents' ? <Agents /> : <Shortcuts />}
       </ScrollView>
     </View>
   );
@@ -402,6 +404,253 @@ function VaultStatusCard({ v }: { v: VaultStatus }) {
 }
 
 // ---------------------------------------------------------------------------
+// Teams: members, roles and invitations. A team's projects sit with yours.
+// ---------------------------------------------------------------------------
+function Teams() {
+  const app = useApp();
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+  const { refreshTeams } = app;
+  useEffect(() => {
+    refreshTeams().catch(() => {});
+  }, [refreshTeams]);
+  const fail = (e: unknown) => app.toast({ icon: 'error', text: errorText(e), ttl: 5000 });
+  const create = async () => {
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    try {
+      const team = await lore.createTeam(name.trim());
+      setName('');
+      await refreshTeams();
+      setOpen(team.id);
+      app.toast({ icon: 'groups', text: `Team ${team.name} creato` });
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const current = app.teams.find((t) => t.id === open) ?? null;
+  return (
+    <>
+      <Header title="Team" body="Lavora sugli stessi progetti con altre persone. I progetti di un team compaiono tra i tuoi, con il nome del team; chi è in sola lettura li legge senza modificarli." />
+      {app.invites.length ? (
+        <Card style={{ gap: 10 }}>
+          <Text style={t(500, 14, 1.3)}>Inviti ricevuti</Text>
+          {app.invites.map((i) => (
+            <View key={i.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Icon name="group_add" size={18} color={c.blueTint} />
+              <Text numberOfLines={1} style={[t(400, 13, 1.4, { color: c.ink2 }), { flex: 1 }]}>
+                <Text style={{ color: c.ink, fontWeight: '500' }}>{i.teamName}</Text> · {ROLE_LABEL[i.role].toLowerCase()}
+                {i.invitedBy ? ` · da ${i.invitedBy}` : ''}
+              </Text>
+              <Btn height={30} label="Rifiuta" onPress={() => app.answerInvite(i.id, false)} />
+              <Btn height={30} variant="primary" label="Accetta" onPress={() => app.answerInvite(i.id, true)} />
+            </View>
+          ))}
+        </Card>
+      ) : null}
+      <View style={{ borderWidth: 1, borderColor: c.hair, borderRadius: radius.card, overflow: 'hidden' }}>
+        {app.teams.map((tm, i) => {
+          const on = tm.id === open;
+          return (
+            <Hover
+              key={tm.id}
+              onPress={() => setOpen(on ? null : tm.id)}
+              style={({ hovered }) => [rowStyle, { height: 52, borderTopWidth: i ? 1 : 0, backgroundColor: on ? c.purple10 : hovered ? c.fill04 : 'transparent' }]}
+            >
+              <Icon name="groups" size={19} color={c.blueTint} />
+              <Text numberOfLines={1} style={[t(500, 13.5, 1.2), { flex: 1 }]}>
+                {tm.name}
+              </Text>
+              <Text style={t(400, 12.5, 1, { color: c.ink3 })}>{ROLE_LABEL[tm.role]}</Text>
+              <Icon name={on ? 'expand_less' : 'expand_more'} size={18} color={c.ink3} />
+            </Hover>
+          );
+        })}
+        <View style={[rowStyle, { height: 60, borderTopWidth: app.teams.length ? 1 : 0 }]}>
+          <View style={{ flex: 1 }}>
+            <Field value={name} onChangeText={setName} icon="group_add" placeholder="Nome del nuovo team" onSubmitEditing={create} />
+          </View>
+          <Btn variant="primary" icon="add" label={busy ? 'Creo…' : 'Crea team'} disabled={!name.trim() || busy} onPress={create} />
+        </View>
+      </View>
+      {current ? <TeamPanel key={current.id} team={current} onGone={() => setOpen(null)} /> : null}
+    </>
+  );
+}
+
+const errorText = (e: unknown) => (e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e));
+
+function TeamPanel({ team, onGone }: { team: Team; onGone: () => void }) {
+  const app = useApp();
+  const manage = canManage(team.role);
+  const [members, setMembers] = useState<TeamMember[] | null>(null);
+  const [invites, setInvites] = useState<TeamInvite[]>([]);
+  const [rename, setRename] = useState(team.name);
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<InviteRole>('editor');
+  const [confirm, setConfirm] = useState<'delete' | 'leave' | null>(null);
+  const fail = (e: unknown) => app.toast({ icon: 'error', text: errorText(e), ttl: 5000 });
+  const load = React.useCallback(async () => {
+    try {
+      const [m, i] = await Promise.all([lore.teamMembers(team.id), manage ? lore.teamInvites(team.id) : Promise.resolve([])]);
+      setMembers(sortMembers(m));
+      setInvites(i);
+    } catch (e) {
+      app.toast({ icon: 'error', text: errorText(e), ttl: 5000 });
+    }
+  }, [team.id, manage]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load();
+  }, [load]);
+  const run = async (fn: () => Promise<unknown>, after?: () => void) => {
+    try {
+      await fn();
+      after?.();
+      await load();
+    } catch (e) {
+      fail(e);
+    }
+  };
+  const owners = members?.filter((m) => m.role === 'owner').length ?? 0;
+  const me = members?.find((m) => m.isYou);
+  const invite = () =>
+    looksLikeEmail(email)
+      ? run(
+          () => lore.inviteToTeam(team.id, email.trim(), role),
+          () => {
+            app.toast({ icon: 'outgoing_mail', mono: email.trim(), text: 'invitato: vedrà l’invito accedendo a Lore' });
+            setEmail('');
+          },
+        )
+      : fail(new Error('Inserisci un’email valida'));
+  const leaveOrDelete = async (what: 'delete' | 'leave') => {
+    try {
+      if (what === 'delete') await lore.deleteTeam(team.id);
+      else await lore.removeMember(team.id, me!.userId);
+      await app.refreshTeams();
+      await app.refresh();
+      app.toast({ icon: what === 'delete' ? 'delete' : 'logout', text: what === 'delete' ? `Team ${team.name} eliminato` : `Sei uscito da ${team.name}` });
+      onGone();
+    } catch (e) {
+      setConfirm(null);
+      fail(e);
+    }
+  };
+  return (
+    <Card style={{ gap: 18 }}>
+      {manage ? (
+        <View>
+          <FieldLabel>Nome del team</FieldLabel>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <View style={{ flex: 1 }}>
+              <Field value={rename} onChangeText={setRename} />
+            </View>
+            <Btn
+              label="Rinomina"
+              disabled={!rename.trim() || rename.trim() === team.name}
+              onPress={() => run(() => lore.renameTeam(team.id, rename.trim()), () => app.refreshTeams())}
+            />
+          </View>
+        </View>
+      ) : null}
+
+      <View style={{ gap: 4 }}>
+        <Text style={[t(600, 10.5, 1, { letterSpacing: 0.84, textTransform: 'uppercase', color: c.ink3 }), { marginBottom: 6 }]}>Membri</Text>
+        {(members ?? []).map((m) => (
+          <View key={m.userId} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 42 }}>
+            <Avatar name={m.name ?? m.email ?? '?'} size={26} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text numberOfLines={1} style={t(500, 13, 1.3)}>
+                {m.name ?? m.email ?? 'Utente'}
+                {m.isYou ? <Text style={{ color: c.ink3, fontWeight: '400' }}> (tu)</Text> : null}
+              </Text>
+              {m.name && m.email ? (
+                <Text numberOfLines={1} style={t(400, 11.5, 1.3, { color: c.ink3 })}>
+                  {m.email}
+                </Text>
+              ) : null}
+            </View>
+            {manage && !(m.isYou && owners <= 1) ? (
+              <View style={{ width: 170 }}>
+                <Select
+                  label={ROLE_LABEL[m.role]}
+                  options={(['owner', 'editor', 'viewer'] as TeamRole[]).map((r) => ({
+                    label: `${ROLE_LABEL[r]} — ${ROLE_HINT[r]}`,
+                    checked: m.role === r,
+                    onPress: () => r !== m.role && run(() => lore.setMemberRole(team.id, m.userId, r), () => m.isYou && app.refreshTeams()),
+                  }))}
+                />
+              </View>
+            ) : (
+              <Text style={t(400, 12.5, 1, { color: c.ink3 })}>{ROLE_LABEL[m.role]}</Text>
+            )}
+            {manage && !m.isYou ? (
+              <Hover
+                onPress={() => run(() => lore.removeMember(team.id, m.userId), () => app.toast({ icon: 'person_remove', text: `${m.name ?? m.email ?? 'Membro'} rimosso dal team` }))}
+                accessibilityLabel="Rimuovi dal team"
+                style={({ hovered }) => ({ width: 26, height: 26, borderRadius: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: hovered ? c.error13 : 'transparent' })}
+              >
+                <Icon name="close" size={15} color={c.ink3} />
+              </Hover>
+            ) : (
+              <View style={{ width: 26 }} />
+            )}
+          </View>
+        ))}
+        {!members ? <Spinner size={16} /> : null}
+      </View>
+
+      {manage ? (
+        <View style={{ gap: 8 }}>
+          <Text style={t(600, 10.5, 1, { letterSpacing: 0.84, textTransform: 'uppercase', color: c.ink3 })}>Invita</Text>
+          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+            <View style={{ flex: 1 }}>
+              <Field value={email} onChangeText={setEmail} icon="mail" placeholder="nome@esempio.it" onSubmitEditing={invite} />
+            </View>
+            <Segmented width={220} value={role} onChange={setRole} options={INVITE_ROLES.map((r) => ({ value: r, label: ROLE_LABEL[r] }))} />
+            <Btn variant="primary" label="Invita" disabled={!email.trim()} onPress={invite} />
+          </View>
+          <Text style={t(400, 11.5, 1.4, { color: c.ink3 })}>L’invito arriva nell’app: la persona lo accetta accedendo a Lore con questa email. Scade dopo qualche giorno.</Text>
+          {invites.map((i) => (
+            <View key={i.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 34 }}>
+              <Icon name="schedule_send" size={16} color={c.ink3} />
+              <Text numberOfLines={1} style={[t(400, 12.5, 1.3, { color: c.ink2 }), { flex: 1 }]}>
+                {i.email} · {ROLE_LABEL[i.role].toLowerCase()} · in attesa, scade {relTime(i.expiresAt).replace(/ fa$/, '')}
+              </Text>
+              <Btn height={28} label="Revoca" onPress={() => run(() => lore.revokeInvite(team.id, i.id))} />
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      <View style={{ flexDirection: 'row', gap: 8, borderTopWidth: 1, borderColor: c.hair, paddingTop: 14 }}>
+        <View style={{ flex: 1 }} />
+        {me && !(me.role === 'owner' && owners <= 1) ? (
+          confirm === 'leave' ? (
+            <Btn variant="danger" label="Conferma: esci dal team" onPress={() => leaveOrDelete('leave')} />
+          ) : (
+            <Btn icon="logout" label="Esci dal team" onPress={() => setConfirm('leave')} />
+          )
+        ) : null}
+        {manage ? (
+          confirm === 'delete' ? (
+            <Btn variant="danger" label="Conferma: elimina il team" onPress={() => leaveOrDelete('delete')} />
+          ) : (
+            <Btn icon="delete" label="Elimina team" textColor={c.error} onPress={() => setConfirm('delete')} />
+          )
+        ) : null}
+      </View>
+      {me?.role === 'owner' && owners <= 1 ? (
+        <Text style={t(400, 11.5, 1.4, { color: c.ink3, marginTop: -10 })}>Sei l’unico proprietario: per uscire nomina prima un altro proprietario. Un team si elimina solo quando non ha più file.</Text>
+      ) : null}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Agents
 // ---------------------------------------------------------------------------
 function Agents() {
@@ -410,7 +659,10 @@ function Agents() {
   const [created, setCreated] = useState<NewAgent | null>(null);
   const [revoking, setRevoking] = useState<Agent | null>(null);
   const update = (id: string, patch: Partial<Pick<Agent, 'permission' | 'scope'>>) => app.updateAgent(id, patch);
-  const names = projects(app.tree).map((p) => p.name);
+  // Agents reach the user's own projects only (team projects come with phase 5 on the server).
+  const names = projects(app.tree)
+    .filter((p) => !p.project?.team)
+    .map((p) => p.name);
   const lastWrite = (id: string) => app.audit.find((i) => i.agent?.id === id)?.at;
 
   return (

@@ -11,9 +11,19 @@ class ApiError extends Error {
   }
 }
 
-// Server messages are English; the UI is Italian.
+// Server messages are English; the UI is Italian (same wording as the mobile app).
 function message(status, error) {
+  const e = error ?? '';
   if (status === 401) return 'Sessione non valida: esci e accedi di nuovo';
+  if (status === 403) return 'Non hai i permessi per farlo';
+  if (status === 429) return 'Troppi inviti in sospeso';
+  // Team rules answer 409 too: tell them apart from a stale file by the server's message.
+  if (/at least one owner/i.test(e)) return 'Serve almeno un proprietario: nomina prima un altro proprietario';
+  if (/already a member/i.test(e)) return 'Questa persona è già nel team';
+  if (/already pending/i.test(e)) return 'Esiste già un invito per questa email';
+  if (/still has files/i.test(e)) return 'Il team ha ancora dei file: spostali o eliminali prima';
+  if (/team limit/i.test(e)) return 'Hai raggiunto il numero massimo di team';
+  if (/valid email/i.test(e)) return 'Inserisci un’email valida';
   if (status === 409) return 'Il file è stato modificato nel frattempo (da un agente o da un altro dispositivo): ricarica e riprova';
   if (/already exists/i.test(error ?? '')) return 'Esiste già un file con questo nome';
   if (/too large/i.test(error ?? '')) return 'File o cartella troppo grande';
