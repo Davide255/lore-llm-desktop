@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld('lore', {
   signIn: call('auth:signIn'),
   cancelSignIn: call('auth:cancelSignIn'),
   signOut: call('auth:signOut'),
+  deleteAccount: call('account:delete'),
   onAuthChanged: on('auth:changed'),
   onChanged: on('kb:changed'),
   onActivity: on('kb:activity'),

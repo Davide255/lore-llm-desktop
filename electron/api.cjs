@@ -18,6 +18,7 @@ function message(status, error) {
   if (status === 403) return 'Non hai i permessi per farlo';
   if (status === 429) return 'Troppi inviti in sospeso';
   // Team rules answer 409 too: tell them apart from a stale file by the server's message.
+  if (/only owner of a team/i.test(e)) return 'Sei l’unico proprietario di un team: nomina un altro proprietario o elimina il team, poi riprova';
   if (/at least one owner/i.test(e)) return 'Serve almeno un proprietario: nomina prima un altro proprietario';
   if (/already a member/i.test(e)) return 'Questa persona è già nel team';
   if (/already pending/i.test(e)) return 'Esiste già un invito per questa email';

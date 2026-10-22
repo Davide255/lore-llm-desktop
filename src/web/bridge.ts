@@ -596,6 +596,12 @@ export function createWebBridge(): LoreBridge {
     signIn: (provider) => auth.signIn(provider),
     cancelSignIn: async () => auth.cancelSignIn(),
     signOut: () => auth.signOut(),
+    deleteAccount: async () => {
+      await request('DELETE', '/v1/account');
+      state = { ...state, userId: null, activity: [], authors: {}, folders: [], agentRefs: {}, lastSeenActivity: 0, lastLogId: 0 };
+      saveState();
+      return auth.signOut();
+    },
     onAuthChanged: authCh.on,
     onChanged: changed.on,
     onActivity: activityCh.on,

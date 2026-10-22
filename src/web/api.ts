@@ -15,6 +15,7 @@ export class ApiError extends Error {
 // Server messages are English; the UI is Italian.
 function message(status: number, error?: string) {
   if (status === 401) return 'Sessione non valida: esci e accedi di nuovo';
+  if (/only owner of a team/i.test(error ?? '')) return 'Sei l’unico proprietario di un team: nomina un altro proprietario o elimina il team, poi riprova';
   if (status === 409) return 'Il file è stato modificato nel frattempo (da un agente o da un altro dispositivo): ricarica e riprova';
   if (/already exists/i.test(error ?? '')) return 'Esiste già un file con questo nome';
   if (/too large/i.test(error ?? '')) return 'File o cartella troppo grande';

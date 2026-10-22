@@ -76,6 +76,14 @@ function Header({ title, body, action }: { title: string; body: string; action?:
 function Account() {
   const app = useApp();
   const { user } = app;
+  const [confirm, setConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const deleteAccount = async () => {
+    setDeleting(true);
+    await app.deleteAccount();
+    setDeleting(false);
+    setConfirm(false);
+  };
   return (
     <>
       <Header title="Account" body="La knowledge base è legata al tuo account: ogni account ha la sua." />
@@ -91,6 +99,25 @@ function Account() {
             </Text>
           </View>
           <Btn icon="logout" label="Esci" onPress={app.signOut} />
+        </Card>
+      ) : null}
+      {user ? (
+        <Card style={{ gap: 12 }}>
+          <Text style={t(500, 14, 1.3)}>Elimina account</Text>
+          <Text style={t(400, 12.5, 1.5, { color: c.ink3 })}>
+            Cancella per sempre il tuo account: progetti e file sul server, agenti collegati, iscrizioni ai team e accesso con Google o Apple. Non si può annullare. Se sei l’unico proprietario di un team, nomina prima un altro proprietario o elimina il team. La cartella Obsidian sul computer resta dov’è.
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <View style={{ flex: 1 }} />
+            {confirm ? (
+              <>
+                <Btn label="Annulla" disabled={deleting} onPress={() => setConfirm(false)} />
+                <Btn variant="danger" label={deleting ? 'Eliminazione…' : 'Conferma: elimina definitivamente'} disabled={deleting} onPress={deleteAccount} />
+              </>
+            ) : (
+              <Btn icon="delete" label="Elimina account" textColor={c.error} onPress={() => setConfirm(true)} />
+            )}
+          </View>
         </Card>
       ) : null}
     </>

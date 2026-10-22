@@ -206,6 +206,11 @@ function fakeBridge({ signedIn, vault = false }) {
     signIn: rec('signIn', async () => state.user),
     cancelSignIn: rec('cancelSignIn', async () => {}),
     signOut: rec('signOut', async () => {}),
+    deleteAccount: rec('deleteAccount', async () => {}),
+    otaReady: rec('otaReady', async () => {}),
+    otaStatus: rec('otaStatus', async () => ({ enabled: false, phase: 'idle', appVersion: '1.0.2', channel: 'production', version: null })),
+    otaCheck: rec('otaCheck', async () => 'idle'),
+    onOtaStatus: noop,
     onAuthChanged: noop,
     onChanged: noop,
     onActivity: noop,
@@ -431,6 +436,21 @@ test('settings: create a team, see its members, invite someone', async () => {
   await page.getByText('Crea team', { exact: true }).click();
   assert.deepEqual(await calls(page, 'createTeam'), [['Nuovo team']]);
   await page.getByText('Team Nuovo team creato').waitFor();
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('settings: deleting the account needs a second click and then signs the user out', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Impostazioni', { exact: true }).first().click();
+  await page.getByText('Account', { exact: true }).first().click();
+  await page.getByText('Elimina account', { exact: true }).last().click();
+  assert.deepEqual(await calls(page, 'deleteAccount'), [], 'the first click only asks for confirmation');
+  await page.getByText('Annulla', { exact: true }).click();
+  await page.getByText('Elimina account', { exact: true }).last().click();
+  await page.getByText('Conferma: elimina definitivamente').click();
+  assert.deepEqual(await calls(page, 'deleteAccount'), [[]]);
+  await page.getByText('Accedi con Google').waitFor();
   assert.deepEqual(errors, []);
   await page.close();
 });

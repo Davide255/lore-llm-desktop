@@ -356,6 +356,8 @@ export interface LoreBridge {
   signIn(provider?: SignInProvider): Promise<AuthUser | null>;
   cancelSignIn(): Promise<void>;
   signOut(): Promise<void>;
+  /** Deletes the account for good (files, agents, team memberships, sign-in identity), then signs out. Refused while the user alone owns a team. */
+  deleteAccount(): Promise<void>;
   onAuthChanged(cb: (user: AuthUser | null) => void): () => void;
   onChanged(cb: (ev: ChangedEvent) => void): () => void;
   onActivity(cb: (ev: ActivityEvent) => void): () => void;

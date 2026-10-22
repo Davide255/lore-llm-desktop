@@ -1409,6 +1409,17 @@ handle('auth:signOut', async () => {
   }
   return auth.signOut();
 });
+// Account deletion (App Store 5.1.1(v)): the Worker erases the cloud side; here the local copies
+// of the account go too. The vault folder is the user's own notes: it stays on disk.
+handle('account:delete', async () => {
+  const id = auth.user()?.id;
+  await request('DELETE', '/v1/account');
+  stopVault();
+  if (id) await fsp.rm(syncDir(id), { recursive: true, force: true }).catch(() => {});
+  state = { ...state, userId: null, activity: [], authors: {}, folders: [], agentRefs: {}, prefs: {}, lastSeenActivity: 0, lastLogId: 0, openProjects: [] };
+  saveState();
+  return auth.signOut();
+});
 
 // ---------------------------------------------------------------------------
 // Attachments for the renderer: from the vault when it's on, else downloaded

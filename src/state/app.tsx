@@ -99,6 +99,8 @@ interface AppCtx {
   signIn: (provider?: SignInProvider) => Promise<void>;
   cancelSignIn: () => void;
   signOut: () => Promise<void>;
+  /** Deletes the account and everything in it; errors are shown to the user. */
+  deleteAccount: () => Promise<void>;
   sync: Sync;
   setSync: (s: Sync) => void;
   /** The local vault for Obsidian (null until known). */
@@ -645,6 +647,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [toast, fail]);
 
+  const deleteAccount = useCallback(async () => {
+    try {
+      await lore.deleteAccount();
+      setUser(null);
+      toast({ icon: 'delete', text: 'Account eliminato' });
+    } catch (e) {
+      fail(e);
+    }
+  }, [toast, fail]);
+
   const answerInvite = useCallback(
     async (id: string, accept: boolean) => {
       const inv = invites.find((i) => i.id === id);
@@ -712,6 +724,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     signIn,
     cancelSignIn,
     signOut,
+    deleteAccount,
     sync,
     setSync,
     vault,
