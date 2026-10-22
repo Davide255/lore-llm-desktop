@@ -6,6 +6,57 @@ Claude Design file *KB Desktop* (Athly design system, dark).
 Part of Lore LLM: [backend](https://github.com/Davide255/lore-llm) ·
 [mobile app](https://github.com/Davide255/lore-llm-mobile).
 
+**Quick links:** [Web app](https://davide255.github.io/lore-llm-desktop/) ·
+[Website](https://davide255.github.io/lore-llm/) ·
+[Getting started](#getting-started) ·
+[Privacy policy](https://davide255.github.io/lore-llm/privacy-policy/) ·
+[Terms of service](https://davide255.github.io/lore-llm/terms-of-service/)
+
+## Getting started
+
+### Try it without installing
+Open the **[web version](https://davide255.github.io/lore-llm-desktop/)** and sign in with Google. It is the same UI
+as the desktop app (minus the local vault / Obsidian sync, which need a real folder).
+
+### Run it from source
+Requirements: **Node.js 22+** (the test suite needs ≥ 22.18, see `npm test` below) and npm.
+
+```sh
+git clone https://github.com/Davide255/lore-llm-desktop.git && cd lore-llm-desktop
+npm ci --legacy-peer-deps     # same flag as CI; plain `npm install` also works
+npm run dev                   # Vite + Electron with hot reload
+```
+Sign in with Google and you land on the Projects screen: create a project (a top-level folder), add notes, tick
+checklist items. To let an AI agent read and write the same knowledge base, open *Impostazioni → Agenti*, create an
+agent, copy its token and follow the *Connect an agent* steps of the [project site](https://davide255.github.io/lore-llm/#connect).
+
+Prefer the browser? `npm run dev:web` serves the UI on <http://localhost:5173>. Add that URL to the Cognito app
+client's *Allowed callback URLs* first (see [Web version](#web-version-github-pages)).
+
+### Check that it works
+```sh
+npm run typecheck && npm test   # unit tests: checklist, links, spaces, mirror, merge, vault sync…
+npm run test:ui                 # renderer in headless Chrome with a fake bridge
+npm run build:web               # static browser bundle in dist-web/
+```
+
+### Use your own backend
+By default the app talks to the maintainer's dev Worker. To use yours (deployed from
+[lore-llm](https://github.com/Davide255/lore-llm#getting-started)), set these before `npm run dev` / `npm run dist`:
+
+```sh
+export LORE_API_URL=https://<your-worker>.workers.dev
+export LORE_COGNITO_DOMAIN=https://<your-domain>.auth.<region>.amazoncognito.com
+export LORE_COGNITO_CLIENT_ID=<your public app client id>
+```
+The client id must also be listed in the Worker's `COGNITO_CLIENT_IDS`. Details in [Sign in with Google](#sign-in-with-google).
+
+### Build an installer
+```sh
+npm run dist     # electron-builder → release/ (NSIS on Windows, DMG on macOS, AppImage on Linux)
+```
+Build on the OS you target. Live updates of the renderer without a new installer: [`docs/OTA.md`](docs/OTA.md).
+
 ## Knowledge base model
 
 - The KB lives in your cloud space on the Lore server; each top-level folder is a **project**.
