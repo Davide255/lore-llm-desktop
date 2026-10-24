@@ -63,6 +63,8 @@ contextBridge.exposeInMainWorld('lore', {
   server: call('app:server'),
   prefs: call('app:prefs'),
   setPrefs: call('app:setPrefs'),
+  systemSettings: call('system:get'),
+  setSystemSettings: call('system:set'),
   copy: call('app:copy'),
   platform: call('app:platform'),
   confirmClose: call('app:confirmClose'),

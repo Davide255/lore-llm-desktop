@@ -3,7 +3,7 @@
 // behind the Worker); the renderer (React Native via react-native-web) talks
 // to it only through the IPC surface exposed in preload.cjs. Optionally a
 // local vault (vault.cjs) mirrors it to a folder that Obsidian edits.
-const { app, BrowserWindow, ipcMain, shell, clipboard, dialog, protocol, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, clipboard, dialog, protocol, powerMonitor, Tray, Menu, nativeImage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -15,6 +15,7 @@ const { createMirror } = require('./mirror.cjs');
 const { scoped, teamOf, projectOf, checkProjectName, canWrite } = require('./spaces.cjs');
 const { VaultSync, scanVault, planSync, folderNames, kindOf } = require('./vault.cjs');
 const obsidian = require('./obsidian.cjs');
+const background = require('./background.cjs');
 const { createOta } = require('./ota.cjs');
 const otaConfig = require('./ota.config.json');
 
@@ -48,7 +49,7 @@ const LEGACY_LIST_MS = 60_000;
 const statePath = () => path.join(app.getPath('userData'), 'lore-state.json');
 // agentRefs: id -> { name, kind } for every agent ever seen, so revoked ones keep their identity.
 // openProjects: keys of the projects opened lately, loaded again in the background at launch.
-let state = { userId: null, activity: [], authors: {}, folders: [], agentRefs: {}, prefs: {}, lastSeenActivity: 0, lastLogId: 0, openProjects: [] };
+let state = { userId: null, activity: [], authors: {}, folders: [], agentRefs: {}, prefs: {}, system: background.DEFAULTS, lastSeenActivity: 0, lastLogId: 0, openProjects: [] };
 
 function loadState() {
   try {
@@ -77,6 +78,7 @@ function onUser(user) {
     saveState();
   }
   if (user) startVault().catch(() => {});
+  syncBackground();
 }
 
 // ---------------------------------------------------------------------------
@@ -690,8 +692,75 @@ function send(channel, payload) {
 function focusWindow() {
   if (!win || win.isDestroyed()) return createWindow();
   if (win.isMinimized()) win.restore();
+  win.show();
   win.focus();
 }
+
+// ---------------------------------------------------------------------------
+// Background runner (background.cjs): with the vault on, closing the window hides the app and
+// the vault keeps syncing; the tray / menu-bar icon brings it back or quits for real.
+// ---------------------------------------------------------------------------
+let tray = null;
+let appQuitting = false;
+
+const systemSettings = () => background.normalize(state.system);
+
+function backgroundActive() {
+  const u = auth.user();
+  return background.isActive({ platform: process.platform, settings: systemSettings(), vaultEnabled: !!u && vaultConfig(u.id).enabled, signedIn: !!u });
+}
+
+function trayMenu() {
+  return Menu.buildFromTemplate([
+    { label: 'Apri Lore LLM Desktop', click: () => focusWindow() },
+    { label: 'Sincronizza ora', click: () => vault?.syncNow().catch(() => {}) },
+    { type: 'separator' },
+    { label: 'Esci', click: () => app.quit() },
+  ]);
+}
+
+function ensureTray() {
+  if (tray && !tray.isDestroyed()) return;
+  const size = isMac ? 18 : 16;
+  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, 'icon.png')).resize({ width: size, height: size }));
+  tray.setToolTip('Lore LLM Desktop: la sincronizzazione con Obsidian resta attiva');
+  tray.setContextMenu(trayMenu());
+  // Windows: a click on the icon opens the window (the menu is on the right click).
+  if (!isMac) tray.on('click', () => focusWindow());
+}
+
+function removeTray() {
+  if (tray && !tray.isDestroyed()) tray.destroy();
+  tray = null;
+}
+
+/** The tray exists exactly while the runner is on. Called whenever the vault, the user or the setting changes. */
+function syncBackground() {
+  if (backgroundActive()) ensureTray();
+  else {
+    removeTray();
+    // A window hidden by the runner must not be left with no way back.
+    if (win && !win.isDestroyed() && !win.isVisible()) focusWindow();
+  }
+}
+
+/** Open at login: a packaged build only (a dev run would register Electron itself). */
+function applyLoginItem() {
+  if (!app.isPackaged || !background.supported(process.platform)) return;
+  try {
+    app.setLoginItemSettings(background.loginItemSettings(systemSettings().openAtLogin, process.platform));
+  } catch {
+    /* not allowed here (sandbox): the setting stays what the user chose */
+  }
+}
+
+const systemStatus = () => ({
+  ...systemSettings(),
+  supported: background.supported(process.platform),
+  // A dev run would register Electron itself as the login item.
+  loginItemAvailable: app.isPackaged,
+  active: backgroundActive(),
+});
 
 // ---------------------------------------------------------------------------
 // Live updates (docs/OTA.md): the renderer can start from a signed bundle downloaded into
@@ -748,9 +817,10 @@ function loadRenderer(w) {
   return w.loadFile(entry);
 }
 
-function createWindow() {
+function createWindow({ hidden = false } = {}) {
   allowClose = false;
   win = new BrowserWindow({
+    show: !hidden,
     width: 1280,
     height: 800,
     minWidth: 960,
@@ -793,10 +863,19 @@ function createWindow() {
 
   // Let the renderer veto closing when the editor has unsaved changes.
   win.on('close', (e) => {
-    if (allowClose) return;
+    const action = background.closeAction({ allowClose, active: backgroundActive(), quitting: appQuitting, visible: win.isVisible() });
+    if (action === 'close') return;
     e.preventDefault();
-    send('app:close-requested');
+    if (action === 'hide') {
+      allowClose = false;
+      win.hide();
+    } else send('app:close-requested');
   });
+  // No Dock icon while the app only runs in the background (the menu-bar icon stays).
+  if (isMac) {
+    win.on('hide', () => backgroundActive() && app.dock?.hide());
+    win.on('show', () => app.dock?.show());
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1241,6 +1320,7 @@ handle('vault:enable', async ({ root, linkFormat = 'markdown' } = {}) => {
   await fsp.mkdir(abs, { recursive: true });
   await obsidian.writeDefaultConfig(abs, { linkFormat });
   await saveVaultConfig(u.id, { enabled: true, root: abs, linkFormat, ...(bookmark ? { bookmark } : {}), ...(prev.projects ? { projects: prev.projects } : {}) });
+  syncBackground();
   await startVault();
   return vaultStatus();
 });
@@ -1261,6 +1341,7 @@ handle('vault:disable', async ({ deleteLocal = false } = {}) => {
     await fsp.rm(path.join(syncDir(u.id), 'bases'), { recursive: true, force: true });
   }
   releaseAccess();
+  syncBackground();
   send('vault:status', vaultStatus());
   return vaultStatus();
 });
@@ -1376,6 +1457,17 @@ handle('app:setPrefs', (prefs) => {
   saveState();
   return state.prefs;
 });
+handle('system:get', () => systemStatus());
+handle('system:set', (patch) => {
+  const next = { ...systemSettings() };
+  if (typeof patch?.openAtLogin === 'boolean') next.openAtLogin = patch.openAtLogin;
+  if (typeof patch?.background === 'boolean') next.background = patch.background;
+  state.system = next;
+  saveState();
+  applyLoginItem();
+  syncBackground();
+  return systemStatus();
+});
 handle('app:copy', (text) => clipboard.writeText(text));
 handle('app:platform', () => process.platform);
 handle('ota:ready', () => {
@@ -1471,17 +1563,27 @@ app.whenReady().then(() => {
     poll({ force: true });
     vault?.kick(2000);
   });
-  createWindow();
+  applyLoginItem();
+  const hidden = background.startsHidden({
+    argv: process.argv,
+    platform: process.platform,
+    wasOpenedAtLogin: isMac && app.getLoginItemSettings().wasOpenedAtLogin,
+    active: backgroundActive(),
+  });
+  createWindow({ hidden });
+  if (hidden && isMac) app.dock?.hide();
   const initial = process.argv.find((a) => a.startsWith('lore://'));
   if (initial) handleDeepLink(initial);
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    else focusWindow();
   });
 });
 
 // Quitting: let the vault push what's still pending (bounded).
 let quitting = false;
 app.on('before-quit', (e) => {
+  appQuitting = true;
   if (quitting || !vault) return;
   e.preventDefault();
   quitting = true;
@@ -1492,5 +1594,5 @@ app.on('before-quit', (e) => {
 });
 
 app.on('window-all-closed', () => {
-  if (!isMac) app.quit();
+  if (!isMac && !backgroundActive()) app.quit();
 });

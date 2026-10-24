@@ -584,6 +584,8 @@ export function createWebBridge(): LoreBridge {
     otaReady: async () => {},
     otaStatus: async () => ({ enabled: false, phase: 'idle', appVersion: '', channel: 'production', version: null }),
     otaCheck: async () => 'idle',
+    systemSettings: async () => ({ openAtLogin: false, background: false, supported: false, loginItemAvailable: false, active: false }),
+    setSystemSettings: async () => ({ openAtLogin: false, background: false, supported: false, loginItemAvailable: false, active: false }),
 
     async authUser() {
       await auth.ready();

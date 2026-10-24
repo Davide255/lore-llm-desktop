@@ -1,7 +1,7 @@
 {
   "name": "lore-llm-desktop",
   "productName": "Lore LLM Desktop",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "Desktop editor for the knowledge base shared between you and your agents.",
   "main": "electron/main.cjs",

@@ -274,6 +274,19 @@ export interface OtaInfo {
   version: string | null;
 }
 
+/** Desktop system settings: open at login and the background runner (electron/background.cjs). */
+export interface SystemSettings {
+  openAtLogin: boolean;
+  /** Closing the window keeps the app (and the vault sync) running while the local vault is on. */
+  background: boolean;
+  /** macOS and Windows. */
+  supported: boolean;
+  /** Registering the login item needs an installed build. */
+  loginItemAvailable: boolean;
+  /** The runner is on right now: setting on, vault on, signed in. */
+  active: boolean;
+}
+
 export interface LoreBridge {
   tree(fresh?: boolean): Promise<TreeNode[]>;
   /** Loads a project's files (once) and returns the updated tree. */
@@ -344,6 +357,8 @@ export interface LoreBridge {
   server(): Promise<string>;
   prefs(): Promise<Prefs>;
   setPrefs(p: Prefs): Promise<Prefs>;
+  systemSettings(): Promise<SystemSettings>;
+  setSystemSettings(patch: Partial<Pick<SystemSettings, 'openAtLogin' | 'background'>>): Promise<SystemSettings>;
   copy(text: string): Promise<void>;
   platform(): Promise<string>;
   confirmClose(): Promise<void>;

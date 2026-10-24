@@ -10,7 +10,7 @@ export type Route =
   | { name: 'activity'; id?: string }
   | { name: 'settings'; section?: SettingsSection };
 
-export type SettingsSection = 'account' | 'general' | 'team' | 'editor' | 'obsidian' | 'agents' | 'shortcuts';
+export type SettingsSection = 'account' | 'general' | 'team' | 'editor' | 'obsidian' | 'system' | 'agents' | 'shortcuts';
 
 export type Dialog =
   | { kind: 'newFile'; dir: string }
