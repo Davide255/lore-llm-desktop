@@ -390,6 +390,55 @@ export function createWebBridge(): LoreBridge {
       return true;
     },
 
+    // Same rules as electron/upload.cjs: the types and sizes the Worker accepts, a free name.
+    async upload(dir, dropped) {
+      if (!dir) throw new Error('Scegli un progetto o una cartella dove caricare i file');
+      let files: { name: string; data: ArrayBuffer }[];
+      if (dropped?.length) files = dropped;
+      else {
+        const picked = await new Promise<File[]>((resolve) => {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.multiple = true;
+          input.accept = '.md,' + Object.keys(MIME).map((e) => `.${e}`).join(',');
+          input.onchange = () => resolve([...(input.files ?? [])]);
+          input.oncancel = () => resolve([]);
+          input.click();
+        });
+        files = await Promise.all(picked.map(async (f) => ({ name: f.name, data: await f.arrayBuffer() })));
+      }
+      const uploaded: string[] = [];
+      const skipped: { name: string; reason: string }[] = [];
+      const taken = (rel: string) => mirror.has(rel) || uploaded.includes(rel);
+      for (const f of files) {
+        const clean = f.name.split(/[\\/]/).pop()!.replace(/[\u0000-\u001f:*?"<>|]/g, '').trim().replace(/^\.+/, '');
+        const dot = clean.lastIndexOf('.');
+        const ext = dot > 0 ? clean.slice(dot + 1).toLowerCase() : '';
+        if (dot < 1) skipped.push({ name: f.name, reason: 'Nome non valido' });
+        else if (ext !== 'md' && !MIME[ext]) skipped.push({ name: f.name, reason: 'Tipo non supportato (ammessi: immagini PNG, JPG, GIF, WebP, SVG, PDF e note .md)' });
+        else if (!f.data.byteLength) skipped.push({ name: f.name, reason: 'File vuoto' });
+        else if (f.data.byteLength > (ext === 'md' ? 1024 * 1024 : 10 * 1024 * 1024)) skipped.push({ name: f.name, reason: ext === 'md' ? 'Più grande di 1 MB' : 'Più grande di 10 MB' });
+        else {
+          let name = clean;
+          for (let n = 2; taken(`${dir}/${name}`); n++) name = `${clean.slice(0, dot)} ${n}${clean.slice(dot)}`;
+          const rel = `${dir}/${name}`;
+          try {
+            if (ext === 'md') {
+              const content = new TextDecoder().decode(f.data);
+              const file = await mirror.putText(rel, content, { overwrite: false });
+              recordOwnWrite(rel, file.etag);
+              recordChange(rel, null, content, 'you');
+            } else await mirror.putBlob(rel, new Blob([f.data]), { overwrite: false });
+            uploaded.push(rel);
+          } catch (err) {
+            skipped.push({ name: f.name, reason: err instanceof Error ? err.message : String(err) });
+          }
+        }
+      }
+      if (uploaded.length) await resync();
+      return { uploaded, skipped };
+    },
+
     async mkdir(rel) {
       if (state.folders.includes(rel) || filesUnder(rel).length) throw new Error('Esiste già una cartella con questo nome');
       state.folders.push(rel);
@@ -584,6 +633,8 @@ export function createWebBridge(): LoreBridge {
     otaReady: async () => {},
     otaStatus: async () => ({ enabled: false, phase: 'idle', appVersion: '', channel: 'production', version: null }),
     otaCheck: async () => 'idle',
+    systemSettings: async () => ({ openAtLogin: false, background: false, supported: false, loginItemAvailable: false, active: false }),
+    setSystemSettings: async () => ({ openAtLogin: false, background: false, supported: false, loginItemAvailable: false, active: false }),
 
     async authUser() {
       await auth.ready();

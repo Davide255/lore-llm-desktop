@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { isWeb, lore } from '../kb/bridge';
-import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, MyInvite, NewAgent, ObsidianStatus, Permission, Prefs, SignInProvider, Team, TeamRole, TreeNode, VaultStatus } from '../kb/types';
+import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, MyInvite, NewAgent, ObsidianStatus, Permission, Prefs, SignInProvider, Team, TeamRole, TreeNode, UploadFile, VaultStatus } from '../kb/types';
 import { basename, dirname, fileKind, findNode, projectKeyOf, projectLabel as projectLabelOf, unloadedProject } from '../kb/paths';
 
 export type Route =
@@ -10,7 +10,7 @@ export type Route =
   | { name: 'activity'; id?: string }
   | { name: 'settings'; section?: SettingsSection };
 
-export type SettingsSection = 'account' | 'general' | 'team' | 'editor' | 'obsidian' | 'agents' | 'shortcuts';
+export type SettingsSection = 'account' | 'general' | 'team' | 'editor' | 'obsidian' | 'system' | 'agents' | 'shortcuts';
 
 export type Dialog =
   | { kind: 'newFile'; dir: string }
@@ -136,6 +136,8 @@ interface AppCtx {
   ops: {
     createFile: (path: string, content: string) => Promise<void>;
     createFolder: (path: string) => Promise<void>;
+    /** Uploads files into a folder: the given ones, or picked with the system dialog. */
+    upload: (dir: string, files?: UploadFile[]) => Promise<void>;
     rename: (from: string, to: string) => Promise<void>;
     duplicate: (path: string) => Promise<void>;
     remove: (path: string) => Promise<void>;
@@ -490,6 +492,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return true;
         });
         if (ok) navigate({ name: 'file', path, edit: fileKind(path) !== 'index' }, { force: true });
+      },
+      upload: async (dir, files) => {
+        const res = await withSync(() => lore.upload(dir, files));
+        if (!res) return;
+        const n = res.uploaded.length;
+        if (n) toast({ icon: 'upload_file', text: n === 1 ? `Caricato ${basename(res.uploaded[0])}` : `Caricati ${n} file`, ttl: 3000 });
+        // One toast per skipped file would bury the result: say how many, and why for the first.
+        if (res.skipped.length) {
+          const first = res.skipped[0];
+          toast({ icon: 'error', text: res.skipped.length === 1 ? `${first.name}: ${first.reason}` : `${res.skipped.length} file non caricati (${first.name}: ${first.reason})`, ttl: 6000 });
+        }
       },
       createFolder: async (path) => {
         const ok = await withSync(async () => {

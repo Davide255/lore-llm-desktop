@@ -4,11 +4,11 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp, type SettingsSection } from '../state/app';
 import { allFiles, countFiles, projects, relTime } from '../kb/paths';
 import { isWeb, lore } from '../kb/bridge';
-import type { Agent, AgentKind, OtaInfo, OtaPhase, InviteRole, NewAgent, Permission, Team, TeamInvite, TeamMember, TeamRole, VaultProject, VaultStatus } from '../kb/types';
+import type { Agent, AgentKind, OtaInfo, SystemSettings, OtaPhase, InviteRole, NewAgent, Permission, Team, TeamInvite, TeamMember, TeamRole, VaultProject, VaultStatus } from '../kb/types';
 import { canManage, INVITE_ROLES, looksLikeEmail, ROLE_HINT, ROLE_LABEL, sortMembers } from '../kb/teams';
 import { AGENT_KIND_LIST, AGENT_KINDS } from '../kb/agents';
 import { AgentAvatar } from '../ui/identity';
-import { Avatar, Btn, Card, Field, FieldLabel, Hover, Icon, IconWell, isTouch, Kbd, Segmented, Spinner, Toggle, useCompact } from '../ui/primitives';
+import { Avatar, Btn, Card, Field, FieldLabel, Hover, Icon, IconWell, isMac, isTouch, Kbd, Segmented, Spinner, Toggle, useCompact } from '../ui/primitives';
 import { DialogFooter, DialogFrame, DialogTitle, anchorBelow } from '../ui/overlays';
 
 const SECTIONS = ([
@@ -17,16 +17,17 @@ const SECTIONS = ([
   { key: 'team', icon: 'groups', label: 'Team' },
   { key: 'editor', icon: 'edit_note', label: 'Editor' },
   { key: 'obsidian', icon: 'hub', label: 'Obsidian' },
+  { key: 'system', icon: 'settings_applications', label: 'Sistema' },
   { key: 'agents', icon: 'smart_toy', label: 'Agenti' },
   { key: 'shortcuts', icon: 'keyboard', label: 'Scorciatoie' },
 ] as { key: SettingsSection; icon: string; label: string }[])
   // A browser has no folder to keep in sync for Obsidian; a touch screen has no keyboard shortcuts.
-  .filter((s) => !(isWeb && s.key === 'obsidian') && !(isTouch && s.key === 'shortcuts'));
+  .filter((s) => !(isWeb && (s.key === 'obsidian' || s.key === 'system')) && !(isTouch && s.key === 'shortcuts'));
 
 export function SettingsScreen({ section: asked = 'general' }: { section?: SettingsSection }) {
   const app = useApp();
   const compact = useCompact();
-  const section = isWeb && asked === 'obsidian' ? 'general' : asked;
+  const section = isWeb && (asked === 'obsidian' || asked === 'system') ? 'general' : asked;
   return (
     <View style={{ flex: 1, flexDirection: compact ? 'column' : 'row' }}>
       {/* A phone shows the sections as a scrolling strip of tabs above the page. */}
@@ -54,7 +55,7 @@ export function SettingsScreen({ section: asked = 'general' }: { section?: Setti
         })}
       </View>
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: compact ? 22 : 34, paddingHorizontal: compact ? 16 : 44, gap: 22, maxWidth: 1000 }}>
-        {section === 'account' ? <Account /> : section === 'general' ? <General /> : section === 'team' ? <Teams /> : section === 'editor' ? <EditorPrefs /> : section === 'obsidian' ? <ObsidianPrefs /> : section === 'agents' ? <Agents /> : <Shortcuts />}
+        {section === 'account' ? <Account /> : section === 'general' ? <General /> : section === 'team' ? <Teams /> : section === 'editor' ? <EditorPrefs /> : section === 'obsidian' ? <ObsidianPrefs /> : section === 'system' ? <SystemPrefs /> : section === 'agents' ? <Agents /> : <Shortcuts />}
       </ScrollView>
     </View>
   );
@@ -216,6 +217,63 @@ function EditorPrefs() {
         <Toggle value={app.prefs.syncScroll ?? true} onChange={(v) => app.setPrefs({ syncScroll: v })} />
       </Card>
       {isWeb ? null : <DefaultEditorCard />}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// System: open at login and the background runner
+// ---------------------------------------------------------------------------
+function SystemPrefs() {
+  const app = useApp();
+  const [sys, setSys] = useState<SystemSettings | null>(null);
+  const vaultOn = !!app.vault?.enabled;
+  useEffect(() => {
+    lore.systemSettings().then(setSys).catch(() => {});
+  }, [vaultOn]);
+  if (!sys) return null;
+  const set = (patch: Partial<Pick<SystemSettings, 'openAtLogin' | 'background'>>) => lore.setSystemSettings(patch).then(setSys).catch(() => {});
+  return (
+    <>
+      <Header title="Sistema" body="Come l'app si comporta sul computer: se parte con il sistema e se continua a sincronizzare a finestra chiusa." />
+      <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+        <IconWell icon="rocket_launch" tint="blue" />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={t(500, 14, 1.3)}>Apri all'avvio del sistema</Text>
+          <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
+            {!sys.supported
+              ? "Non disponibile su questo sistema."
+              : !sys.loginItemAvailable
+                ? "Disponibile nell'app installata."
+                : sys.background && vaultOn
+                  ? "Lore parte all'accesso senza aprire la finestra e la sincronizzazione con Obsidian riprende subito."
+                  : "Lore si apre quando accedi al computer."}
+          </Text>
+        </View>
+        <Toggle value={sys.openAtLogin} disabled={!sys.supported || !sys.loginItemAvailable} onChange={(v) => set({ openAtLogin: v })} />
+      </Card>
+      <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+        <IconWell icon="sync" tint="purple" />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={t(500, 14, 1.3)}>Sincronizza in background</Text>
+          <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
+            {!sys.supported
+              ? 'Non disponibile su questo sistema.'
+              : !vaultOn
+                ? 'Si attiva con la copia locale per Obsidian: attivala nella sezione Obsidian.'
+                : sys.background
+                  ? `Chiudere la finestra non chiude l'app: resta ${isMac ? 'nella barra dei menu' : "nell'area di notifica"} e continua a sincronizzare. Per uscire usa «Esci» dal suo menu.`
+                  : "Chiudere la finestra chiude l'app e ferma la sincronizzazione."}
+          </Text>
+        </View>
+        <Toggle value={sys.background} disabled={!sys.supported} onChange={(v) => set({ background: v })} />
+      </Card>
+      {sys.active ? (
+        <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Icon name="check_circle" filled size={18} color={c.blueTint} />
+          <Text style={t(400, 12.5, 1.4, { color: c.ink2, flex: 1 })}>Runner in background attivo.</Text>
+        </Card>
+      ) : null}
     </>
   );
 }
