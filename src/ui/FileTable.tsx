@@ -4,8 +4,8 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { editNode, openItemMenu, openRoute } from '../state/actions';
 import { countFiles, fileKind, formatSize, projectLabel, projectOf, relTime } from '../kb/paths';
-import type { AgentRef, Author, TreeNode } from '../kb/types';
-import { eventPoint, Hover, Icon, useCompact } from './primitives';
+import type { AgentRef, Author, PendingUpload, TreeNode } from '../kb/types';
+import { eventPoint, Hover, Icon, Progress, useCompact } from './primitives';
 import { AuthorChip } from './identity';
 
 export type Column = 'size' | 'project' | 'modified' | 'author';
@@ -13,7 +13,7 @@ export type Column = 'size' | 'project' | 'modified' | 'author';
 const WIDTH: Record<Column, number> = { size: 130, project: 150, modified: 150, author: 160 };
 const LABEL: Record<Column, string> = { size: 'Dimensione', project: 'Progetto', modified: 'Modificato', author: 'Autore' };
 
-export function FileIcon({ node, size = 18 }: { node: TreeNode; size?: number }) {
+export function FileIcon({ node, size = 18 }: { node: Pick<TreeNode, 'kind' | 'path'>; size?: number }) {
   if (node.kind === 'folder') return <Icon name="folder" filled size={size} color={c.blueTint} />;
   const k = fileKind(node.path);
   if (k === 'index') return <Icon name="auto_awesome" size={size - 1} color={c.info} />;
@@ -26,7 +26,7 @@ export function AuthorCell({ author, agent }: { author: Author; agent?: AgentRef
   return <AuthorChip author={author} agent={agent} />;
 }
 
-export function FileTable({ rows, columns: wanted, header = true, empty }: { rows: TreeNode[]; columns: Column[]; header?: boolean; empty?: string }) {
+export function FileTable({ rows, columns: wanted, header = true, empty, pending = [] }: { rows: TreeNode[]; columns: Column[]; header?: boolean; empty?: string; pending?: PendingUpload[] }) {
   const app = useApp();
   // A phone keeps the name and when it changed.
   const compact = useCompact();
@@ -45,6 +45,9 @@ export function FileTable({ rows, columns: wanted, header = true, empty }: { row
           ))}
         </View>
       ) : null}
+      {pending.map((u, i) => (
+        <PendingRow key={u.id} upload={u} columns={columns} width={width} padX={padX} first={i === 0 && !header} />
+      ))}
       {rows.map((n, i) => {
         const ctx = app.menu?.target === n.path;
         return (
@@ -58,7 +61,7 @@ export function FileTable({ rows, columns: wanted, header = true, empty }: { row
               openItemMenu(app, n.path, pt.x, pt.y);
             }}
             style={({ hovered }) => [
-              { flexDirection: 'row', alignItems: 'center', gap: 12, height: 48, paddingHorizontal: padX, borderTopWidth: i === 0 && !header ? 0 : 1, borderColor: c.hair, backgroundColor: ctx ? c.purple14 : hovered ? c.fill04 : 'transparent' },
+              { flexDirection: 'row', alignItems: 'center', gap: 12, height: 48, paddingHorizontal: padX, borderTopWidth: i === 0 && !header && !pending.length ? 0 : 1, borderColor: c.hair, backgroundColor: ctx ? c.purple14 : hovered ? c.fill04 : 'transparent' },
               ctx && web({ boxShadow: 'inset 0 0 0 1px rgba(143,92,255,.5)' }),
             ]}
           >
@@ -83,11 +86,46 @@ export function FileTable({ rows, columns: wanted, header = true, empty }: { row
           </Hover>
         );
       })}
-      {!rows.length && empty ? (
+      {!rows.length && !pending.length && empty ? (
         <View style={{ height: 64, alignItems: 'center', justifyContent: 'center', borderTopWidth: header ? 1 : 0, borderColor: c.hair }}>
           <Text style={t(400, 13, 1, { color: c.ink3 })}>{empty}</Text>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+/** A file on its way up: greyed out and not openable, with a bar that follows the bytes sent. */
+function PendingRow({ upload: u, columns, width, padX, first }: { upload: PendingUpload; columns: Column[]; width: (col: Column) => number; padX: number; first: boolean }) {
+  const pct = Math.min(100, Math.floor((u.sent / u.size) * 100));
+  const status = !u.started ? 'In attesa' : pct >= 100 ? 'Salvataggio…' : 'Caricamento…';
+  return (
+    <View
+      accessibilityRole="progressbar"
+      accessibilityLabel={`${u.name}: ${status} ${pct}%`}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: 12, height: 48, paddingHorizontal: padX, borderTopWidth: first ? 0 : 1, borderColor: c.hair, backgroundColor: c.fill04 }}
+    >
+      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <View style={{ opacity: 0.45 }}>
+          <FileIcon node={u.files ? { kind: 'folder', path: u.path } : { kind: 'file', path: u.path }} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
+          <Text numberOfLines={1} style={u.files ? t(400, 13, 1.2, { color: c.ink3 }) : { fontFamily: font.mono, fontSize: 13, color: c.ink3 }}>
+            {u.name}
+          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+            <Progress value={pct / 100} height={3} />
+            <Text style={[t(600, 11, 1, { color: c.ink3 }), { width: 34, textAlign: 'right' }]}>{pct}%</Text>
+          </View>
+        </View>
+      </View>
+      {columns.map((col) => (
+        <View key={col} style={{ width: width(col) }}>
+          <Text numberOfLines={1} style={t(400, 13, 1.2, { color: c.ink3 })}>
+            {col === 'size' ? (u.files ? `${u.files} file` : formatSize(u.size)) : col === 'modified' ? status : '—'}
+          </Text>
+        </View>
+      ))}
     </View>
   );
 }

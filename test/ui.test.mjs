@@ -132,6 +132,27 @@ function fakeBridge({ signedIn, vault = false }) {
       return state.tree;
     }),
     onLoadProgress: () => () => {},
+    // Uploads: `upload` plans two files and stops half way through the first; the test drives the rest.
+    onUpload: (cb) => {
+      window.__uploadEmit = cb;
+      return () => {};
+    },
+    upload: rec('upload', async (dir, files, opts) => {
+      const size = 4_000_000;
+      if (opts?.folder) {
+        // A folder with a file in a subfolder: one grey row for the whole folder, bytes added up.
+        window.__uploadEmit({ type: 'plan', items: [{ id: 1, path: `${dir}/album/a.png`, name: 'a.png', size: 1000 }, { id: 2, path: `${dir}/album/sub/b.pdf`, name: 'b.pdf', size: 3000 }] });
+        window.__uploadEmit({ type: 'progress', id: 1, sent: 1000 });
+        window.__uploadEmit({ type: 'progress', id: 2, sent: 1000 });
+      } else {
+        window.__uploadEmit({ type: 'plan', items: [{ id: 1, path: `${dir}/big.pdf`, name: 'big.pdf', size }, { id: 2, path: `${dir}/next.png`, name: 'next.png', size: 1000 }] });
+        window.__uploadEmit({ type: 'progress', id: 1, sent: size / 2 });
+      }
+      await new Promise((r) => (window.__finishUpload = r));
+      window.__uploadEmit({ type: 'done', id: 1 });
+      window.__uploadEmit({ type: 'done', id: 2 });
+      return { uploaded: [], skipped: [] };
+    }),
     onInvites: () => () => {},
     teams: rec('teams', async () => state.teams),
     team: rec('team', async (id) => state.teams.find((t) => t.id === id)),
@@ -215,6 +236,9 @@ function fakeBridge({ signedIn, vault = false }) {
     onVaultConfirm: noop,
     onVaultNotice: noop,
     onNavigate: noop,
+    otaReady: async () => {},
+    otaStatus: async () => ({ enabled: false, phase: 'idle', appVersion: '', channel: 'production', version: null }),
+    onOtaStatus: noop,
   };
 }
 
@@ -352,6 +376,75 @@ test('attachments open in their own screen', async () => {
   await page.getByText('Usato in').waitFor();
   await page.getByText('Apri', { exact: true }).click();
   assert.deepEqual(await calls(page, 'openAttachment'), [['Athly/pic.png']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('uploading: the file shows greyed out with a bar and its percentage until it is done', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Athly', { exact: true }).first().click();
+  await page.getByText('Nuovo', { exact: true }).click();
+  await page.getByText('Carica file…').click();
+  const big = page.getByRole('progressbar', { name: /big\.pdf/ });
+  await big.waitFor();
+  assert.match(await big.innerText(), /50%/);
+  assert.match(await big.innerText(), /Caricamento/);
+  const next = page.getByRole('progressbar', { name: /next\.png/ });
+  assert.match(await next.innerText(), /In attesa/);
+  assert.match(await next.innerText(), /0%/);
+  await shot(page, 'upload-progress');
+  // Greyed rows are not links: clicking one goes nowhere.
+  await big.click();
+  assert.equal(await page.getByText('Nuovo', { exact: true }).count(), 1);
+  await page.evaluate(() => window.__finishUpload());
+  await big.waitFor({ state: 'detached' });
+  assert.equal(await page.getByRole('progressbar').count(), 0);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('uploading a folder: one greyed row for the folder with the bytes of all its files', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Athly', { exact: true }).first().click();
+  await page.getByText('Nuovo', { exact: true }).click();
+  await page.getByText('Carica cartella…').click();
+  const row = page.getByRole('progressbar', { name: /album/ });
+  await row.waitFor();
+  // 2000 of 4000 bytes sent across a.png and sub/b.pdf.
+  assert.match(await row.innerText(), /50%/);
+  assert.match(await row.innerText(), /2 file/);
+  assert.equal(await page.getByRole('progressbar').count(), 1, 'the files inside are not listed one by one');
+  assert.deepEqual((await calls(page, 'upload'))[0].slice(1), [undefined, { folder: true }]);
+  await page.evaluate(() => window.__finishUpload());
+  await row.waitFor({ state: 'detached' });
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('dropping a folder walks it: subfolders kept, hidden files dropped, other types left unread', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Athly', { exact: true }).first().click();
+  await page.getByText('Nuovo', { exact: true }).waitFor();
+  await page.evaluate(() => {
+    const file = (name, text) => ({ isFile: true, isDirectory: false, name, file: (ok) => ok(new File([text], name)) });
+    const dir = (name, kids) => ({
+      isFile: false,
+      isDirectory: true,
+      name,
+      createReader: () => {
+        let done = false;
+        return { readEntries: (ok) => ok(done ? [] : ((done = true), kids)) };
+      },
+    });
+    const album = dir('album', [file('a.png', 'aaa'), file('.DS_Store', 'x'), file('clip.mp4', 'video'), dir('sub', [file('n.md', 'hello')]), dir('.git', [file('c.md', 'x')])]);
+    const event = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { types: ['Files'], files: [], items: [{ kind: 'file', webkitGetAsEntry: () => album }] } });
+    document.dispatchEvent(event);
+  });
+  await page.waitForFunction(() => window.__calls.some((c) => c.name === 'upload'));
+  const [, files] = (await calls(page, 'upload'))[0];
+  assert.deepEqual(files.map((f) => [f.dir, f.name, f.skip ? 'skipped' : 'read']), [['album', 'a.png', 'read'], ['album', 'clip.mp4', 'skipped'], ['album/sub', 'n.md', 'read']]);
+  await page.evaluate(() => window.__finishUpload?.());
   assert.deepEqual(errors, []);
   await page.close();
 });

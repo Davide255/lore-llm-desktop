@@ -291,7 +291,31 @@ export interface SystemSettings {
 export interface UploadFile {
   name: string;
   data: ArrayBuffer;
+  /** Folder it sits in inside a folder being uploaded ("album/2024"), kept under the target. */
+  dir?: string;
+  /** Why it is not going up, when the sender already knows (type or size): its bytes are not read. */
+  skip?: string;
 }
+
+/** A file on its way into the knowledge base, shown greyed out with a bar until it is in the tree. */
+export interface PendingUpload {
+  id: number;
+  /** Where it will be: dir/name, with the name already made unique. */
+  path: string;
+  name: string;
+  size: number;
+  /** Bytes sent so far. */
+  sent: number;
+  /** False while it waits its turn behind the files before it. */
+  started: boolean;
+  /** Set on the row that stands for a whole folder on its way up: how many files it holds. */
+  files?: number;
+}
+
+export type UploadEvent =
+  | { type: 'plan'; items: { id: number; path: string; name: string; size: number }[] }
+  | { type: 'progress'; id: number; sent: number }
+  | { type: 'done'; id: number };
 
 export interface UploadResult {
   /** Paths of the files now in the knowledge base. */
@@ -360,7 +384,7 @@ export interface LoreBridge {
   openInObsidian(path?: string): Promise<boolean>;
   launchObsidian(): Promise<void>;
   /** Puts files from the user's disk into `dir`: the ones given, or picked with the system dialog when none. */
-  upload(dir: string, files?: UploadFile[]): Promise<UploadResult>;
+  upload(dir: string, files?: UploadFile[], opts?: { folder?: boolean }): Promise<UploadResult>;
   /** Opens an attachment in the system viewer. */
   openAttachment(path: string): Promise<string>;
   /** Browser build only: a URL the page can load an attachment from. Electron serves lore-asset:// instead. */
@@ -389,6 +413,8 @@ export interface LoreBridge {
   onChanged(cb: (ev: ChangedEvent) => void): () => void;
   onActivity(cb: (ev: ActivityEvent) => void): () => void;
   onLoadProgress(cb: (ev: { done: number; total: number }) => void): () => void;
+  /** Files being uploaded: planned, bytes sent, finished. */
+  onUpload(cb: (ev: UploadEvent) => void): () => void;
   onInvites(cb: (invites: MyInvite[]) => void): () => void;
   onCloseRequested(cb: () => void): () => void;
   onVaultStatus(cb: (s: VaultStatus) => void): () => void;

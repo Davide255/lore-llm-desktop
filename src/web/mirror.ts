@@ -115,8 +115,8 @@ export function createMirror() {
       return res.file;
     },
 
-    async putBlob(rel: string, blob: Blob, { overwrite }: { overwrite?: boolean } = {}): Promise<Meta> {
-      const res = await requestRaw('PUT', '/v1/blob', { query: { path: rel, ...(overwrite ? { overwrite: 1 } : {}) }, body: blob });
+    async putBlob(rel: string, blob: Blob, { overwrite, onProgress }: { overwrite?: boolean; onProgress?: (sent: number, total: number) => void } = {}): Promise<Meta> {
+      const res = await requestRaw('PUT', '/v1/blob', { query: { path: rel, ...(overwrite ? { overwrite: 1 } : {}) }, body: blob, onProgress });
       const file = res.json.file;
       attachments.set(rel, { path: rel, size: file.size, uploaded: file.uploaded, etag: file.etag });
       return file;

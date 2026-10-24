@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { isWeb, lore } from '../kb/bridge';
-import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, MyInvite, NewAgent, ObsidianStatus, Permission, Prefs, SignInProvider, Team, TeamRole, TreeNode, UploadFile, VaultStatus } from '../kb/types';
+import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, MyInvite, NewAgent, ObsidianStatus, PendingUpload, Permission, Prefs, SignInProvider, Team, TeamRole, TreeNode, UploadFile, VaultStatus } from '../kb/types';
 import { basename, dirname, fileKind, findNode, projectKeyOf, projectLabel as projectLabelOf, unloadedProject } from '../kb/paths';
 
 export type Route =
@@ -124,6 +124,8 @@ interface AppCtx {
   loadAll: () => Promise<void>;
   /** Progress of loadAll, null when idle. */
   loadProgress: { done: number; total: number } | null;
+  /** Files uploading right now: shown greyed out in their folder until they are in the tree. */
+  uploads: PendingUpload[];
   /** The teams the user belongs to, with their role. */
   teams: Team[];
   refreshTeams: () => Promise<void>;
@@ -137,7 +139,7 @@ interface AppCtx {
     createFile: (path: string, content: string) => Promise<void>;
     createFolder: (path: string) => Promise<void>;
     /** Uploads files into a folder: the given ones, or picked with the system dialog. */
-    upload: (dir: string, files?: UploadFile[]) => Promise<void>;
+    upload: (dir: string, files?: UploadFile[], opts?: { folder?: boolean }) => Promise<void>;
     rename: (from: string, to: string) => Promise<void>;
     duplicate: (path: string) => Promise<void>;
     remove: (path: string) => Promise<void>;
@@ -185,6 +187,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [obsidian, setObsidian] = useState<ObsidianStatus>({ installed: false, registered: false });
   const [opening, setOpening] = useState<Set<string>>(new Set());
   const [loadProgress, setLoadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [invites, setInvites] = useState<MyInvite[]>([]);
   const editorRef = useRef<EditorHandle | null>(null);
@@ -264,8 +267,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const offAuth = lore.onAuthChanged(setUser);
     const offVault = lore.onVaultStatus(setVault);
     const offProgress = lore.onLoadProgress((p) => setLoadProgress((cur) => (cur ? p : cur)));
+    const offUpload = lore.onUpload((ev) =>
+      setUploads((list) => {
+        if (ev.type === 'plan') return [...list, ...ev.items.map((i) => ({ ...i, sent: 0, started: false }))];
+        if (ev.type === 'progress') return list.map((u) => (u.id === ev.id ? { ...u, sent: ev.sent, started: true } : u));
+        return list.filter((u) => u.id !== ev.id);
+      }),
+    );
     const offInvites = lore.onInvites(setInvites);
     return () => {
+      offUpload();
       offProgress();
       offInvites();
       offChanged();
@@ -493,8 +504,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
         if (ok) navigate({ name: 'file', path, edit: fileKind(path) !== 'index' }, { force: true });
       },
-      upload: async (dir, files) => {
-        const res = await withSync(() => lore.upload(dir, files));
+      upload: async (dir, files, opts) => {
+        const res = await withSync(() => lore.upload(dir, files, opts));
         if (!res) return;
         const n = res.uploaded.length;
         if (n) toast({ icon: 'upload_file', text: n === 1 ? `Caricato ${basename(res.uploaded[0])}` : `Caricati ${n} file`, ttl: 3000 });
@@ -741,6 +752,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     opening,
     loadAll,
     loadProgress,
+    uploads,
     teams,
     refreshTeams,
     invites,

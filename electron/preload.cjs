@@ -80,6 +80,7 @@ contextBridge.exposeInMainWorld('lore', {
   onChanged: on('kb:changed'),
   onActivity: on('kb:activity'),
   onLoadProgress: on('kb:loadProgress'),
+  onUpload: on('kb:upload'),
   onInvites: on('invites:changed'),
   onCloseRequested: on('app:close-requested'),
   onVaultStatus: on('vault:status'),

@@ -2,10 +2,11 @@
 // electron/main.cjs does behind IPC, done in the page against the Worker.
 // No local vault or Obsidian here — a browser has no folder to keep in sync.
 import { structuredPatch } from 'diff';
-import type { ActivityEvent, AgentKind, AgentRef, AuthUser, ChangedEvent, LoreBridge, Prefs, TreeNode, VaultStatus } from '../kb/types';
+import type { ActivityEvent, AgentKind, AgentRef, AuthUser, ChangedEvent, LoreBridge, Prefs, TreeNode, UploadEvent, UploadFile, VaultStatus } from '../kb/types';
 import * as auth from './auth';
 import { request } from './api';
 import { API_URL } from './config';
+import { readPickedFolder } from '../kb/dropped';
 import { createMirror, isMd, type Meta } from './mirror';
 
 const POLL_MS = 5000;
@@ -78,6 +79,8 @@ export function createWebBridge(): LoreBridge {
   const activityCh = channel<ActivityEvent>();
   const authCh = channel<AuthUser | null>();
   const notice = channel<{ message: string }>();
+  const uploadCh = channel<UploadEvent>();
+  let uploadSeq = 0;
 
   // ------------------------------------------------------------------ state
   type State = {
@@ -391,51 +394,88 @@ export function createWebBridge(): LoreBridge {
     },
 
     // Same rules as electron/upload.cjs: the types and sizes the Worker accepts, a free name.
-    async upload(dir, dropped) {
+    async upload(dir, dropped, opts) {
       if (!dir) throw new Error('Scegli un progetto o una cartella dove caricare i file');
-      let files: { name: string; data: ArrayBuffer }[];
+      let files: UploadFile[];
       if (dropped?.length) files = dropped;
       else {
+        const folder = !!opts?.folder;
         const picked = await new Promise<File[]>((resolve) => {
           const input = document.createElement('input');
           input.type = 'file';
-          input.multiple = true;
-          input.accept = '.md,' + Object.keys(MIME).map((e) => `.${e}`).join(',');
+          if (folder) input.webkitdirectory = true;
+          else {
+            input.multiple = true;
+            input.accept = '.md,' + Object.keys(MIME).map((e) => `.${e}`).join(',');
+          }
           input.onchange = () => resolve([...(input.files ?? [])]);
           input.oncancel = () => resolve([]);
           input.click();
         });
-        files = await Promise.all(picked.map(async (f) => ({ name: f.name, data: await f.arrayBuffer() })));
+        files = folder ? await readPickedFolder(picked) : await Promise.all(picked.map(async (f) => ({ name: f.name, data: await f.arrayBuffer() })));
       }
       const uploaded: string[] = [];
       const skipped: { name: string; reason: string }[] = [];
-      const taken = (rel: string) => mirror.has(rel) || uploaded.includes(rel);
+      const planned = new Set<string>();
+      const taken = (rel: string) => mirror.has(rel) || planned.has(rel);
+      const todo: { id: number; file: UploadFile; ext: string; rel: string }[] = [];
       for (const f of files) {
-        const clean = f.name.split(/[\\/]/).pop()!.replace(/[\u0000-\u001f:*?"<>|]/g, '').trim().replace(/^\.+/, '');
+        const sub = f.dir ? f.dir.split(/[\\/]/).filter(Boolean) : [];
+        // Hidden files and folders are noise in a folder, not something to report.
+        if (sub.some((p) => p.startsWith('.')) || (sub.length && f.name.startsWith('.'))) continue;
+        const shown = f.dir ? `${f.dir}/${f.name}` : f.name;
+        const cleanPart = (p: string) => p.split(/[\\/]/).pop()!.replace(/[\u0000-\u001f:*?"<>|]/g, '').trim().replace(/^\.+/, '');
+        const folders = sub.map(cleanPart);
+        const clean = cleanPart(f.name);
         const dot = clean.lastIndexOf('.');
         const ext = dot > 0 ? clean.slice(dot + 1).toLowerCase() : '';
-        if (dot < 1) skipped.push({ name: f.name, reason: 'Nome non valido' });
-        else if (ext !== 'md' && !MIME[ext]) skipped.push({ name: f.name, reason: 'Tipo non supportato (ammessi: immagini PNG, JPG, GIF, WebP, SVG, PDF e note .md)' });
-        else if (!f.data.byteLength) skipped.push({ name: f.name, reason: 'File vuoto' });
-        else if (f.data.byteLength > (ext === 'md' ? 1024 * 1024 : 10 * 1024 * 1024)) skipped.push({ name: f.name, reason: ext === 'md' ? 'Più grande di 1 MB' : 'Più grande di 10 MB' });
+        if (f.skip) skipped.push({ name: shown, reason: f.skip });
+        else if (dot < 1 || folders.some((p) => !p)) skipped.push({ name: shown, reason: 'Nome non valido' });
+        else if (ext !== 'md' && !MIME[ext]) skipped.push({ name: shown, reason: 'Tipo non supportato (ammessi: immagini PNG, JPG, GIF, WebP, SVG, PDF e note .md)' });
+        else if (!f.data.byteLength) skipped.push({ name: shown, reason: 'File vuoto' });
+        else if (f.data.byteLength > (ext === 'md' ? 1024 * 1024 : 10 * 1024 * 1024)) skipped.push({ name: shown, reason: ext === 'md' ? 'Più grande di 1 MB' : 'Più grande di 10 MB' });
+        else if (todo.length >= 500) skipped.push({ name: shown, reason: 'Oltre il limite di 500 file per caricamento' });
         else {
+          const parent = [dir, ...folders].join('/');
           let name = clean;
-          for (let n = 2; taken(`${dir}/${name}`); n++) name = `${clean.slice(0, dot)} ${n}${clean.slice(dot)}`;
-          const rel = `${dir}/${name}`;
+          for (let n = 2; taken(`${parent}/${name}`); n++) name = `${clean.slice(0, dot)} ${n}${clean.slice(dot)}`;
+          const rel = `${parent}/${name}`;
+          planned.add(rel);
+          todo.push({ id: ++uploadSeq, file: f, ext, rel });
+        }
+      }
+      // Greyed rows with a bar until the files are really in the tree.
+      uploadCh.emit({ type: 'plan', items: todo.map((u) => ({ id: u.id, path: u.rel, name: u.rel.slice(dir.length + 1), size: u.file.data.byteLength })) });
+      const open = new Set(todo.map((u) => u.id));
+      const finish = (id: number) => open.delete(id) && uploadCh.emit({ type: 'done', id });
+      try {
+        for (const { id, file: f, ext, rel } of todo) {
+          let lastPct = -1;
+          const onProgress = (sent: number, total: number) => {
+            const pct = Math.floor((sent / total) * 100);
+            if (pct === lastPct) return;
+            lastPct = pct;
+            uploadCh.emit({ type: 'progress', id, sent });
+          };
           try {
+            onProgress(0, 1);
             if (ext === 'md') {
               const content = new TextDecoder().decode(f.data);
               const file = await mirror.putText(rel, content, { overwrite: false });
               recordOwnWrite(rel, file.etag);
               recordChange(rel, null, content, 'you');
-            } else await mirror.putBlob(rel, new Blob([f.data]), { overwrite: false });
+              uploadCh.emit({ type: 'progress', id, sent: f.data.byteLength });
+            } else await mirror.putBlob(rel, new Blob([f.data]), { overwrite: false, onProgress });
             uploaded.push(rel);
           } catch (err) {
             skipped.push({ name: f.name, reason: err instanceof Error ? err.message : String(err) });
+            finish(id);
           }
         }
+        if (uploaded.length) await resync();
+      } finally {
+        todo.forEach((u) => finish(u.id));
       }
-      if (uploaded.length) await resync();
       return { uploaded, skipped };
     },
 
@@ -658,5 +698,6 @@ export function createWebBridge(): LoreBridge {
     onNavigate: none,
     onOtaStatus: none,
     onLoadProgress: none,
+    onUpload: uploadCh.on,
   };
 }
