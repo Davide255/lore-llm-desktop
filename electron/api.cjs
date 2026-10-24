@@ -1,6 +1,7 @@
 // HTTP client for the lore-llm Worker. Every call carries the signed-in user's
 // Cognito ID token; the Worker scopes everything to that user.
 const auth = require('./auth.cjs');
+const { progressBody } = require('./progress.cjs');
 
 const API_URL = (process.env.LORE_API_URL || 'https://lore-llm-dev.davide-bera2021.workers.dev').replace(/\/+$/, '');
 
@@ -58,16 +59,20 @@ async function request(method, path, { query, body } = {}) {
 /**
  * Binary twin of `request` for attachments: sends/returns raw bytes.
  * Resolves to `{ status, headers, buffer }`; JSON error bodies become ApiErrors.
+ * `onProgress(sent, total)` reports an upload's bytes as they leave.
  */
-async function requestRaw(method, path, { query, body, headers } = {}) {
+async function requestRaw(method, path, { query, body, headers, onProgress } = {}) {
   const token = await auth.idToken();
   if (!token) throw new ApiError('Accesso richiesto', 401);
+  // `onProgress(sent, total)`: the upload is streamed so the bytes can be counted.
+  const streamed = body !== undefined && onProgress ? progressBody(body, onProgress) : null;
   let res;
   try {
     res = await fetch(urlFor(path, query), {
       method,
-      headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { 'content-type': 'application/octet-stream' } : {}), ...headers },
-      body,
+      headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { 'content-type': 'application/octet-stream' } : {}), ...streamed?.headers, ...headers },
+      body: streamed ? streamed.body : body,
+      ...streamed?.init,
     });
   } catch {
     throw new ApiError('Server Lore non raggiungibile', 0);

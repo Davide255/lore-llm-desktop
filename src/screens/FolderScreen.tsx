@@ -3,8 +3,9 @@ import { ScrollView, Text, View } from 'react-native';
 import { c, font, radius, t } from '../theme';
 import { useApp } from '../state/app';
 import { openItemMenu } from '../state/actions';
-import { countFiles, fileKind, findNode, relTime } from '../kb/paths';
-import type { FileNode, FolderNode } from '../kb/types';
+import { readDropped } from '../kb/dropped';
+import { countFiles, dirname, fileKind, findNode, relTime } from '../kb/paths';
+import type { FileNode, FolderNode, PendingUpload } from '../kb/types';
 import { Btn, eventPoint, Hover, Icon, IconBtn, IconWell, InfoStrip, Progress, useCompact } from '../ui/primitives';
 import { TeamPill } from '../ui/identity';
 import { canWrite } from '../kb/teams';
@@ -47,7 +48,7 @@ export function FolderScreen({ path }: { path: string }) {
       e.preventDefault();
       depth = 0;
       setDragging(false);
-      const files = await Promise.all([...(e.dataTransfer?.files ?? [])].map(async (f) => ({ name: f.name, data: await f.arrayBuffer() })));
+      const files = e.dataTransfer ? await readDropped(e.dataTransfer) : [];
       if (files.length) upload(path, files);
     };
     document.addEventListener('dragenter', enter);
@@ -73,6 +74,8 @@ export function FolderScreen({ path }: { path: string }) {
   const index = node.children.find((n) => n.kind === 'file' && fileKind(n.path) === 'index') as FileNode | undefined;
   const checklist = node.children.find((n) => n.kind === 'file' && fileKind(n.path) === 'checklist') as FileNode | undefined;
   const rows = isProject ? node.children.filter((n) => n !== index && n !== checklist) : node.children;
+  // Files going up into this folder; once one is in the tree the real row replaces its grey one.
+  const pending = pendingHere(app.uploads, path, node.children);
   const n = countFiles(node);
   // Your edits after the last compile mean the agents still have to regenerate index.md.
   const stale = !!index && app.activity.some((a) => a.by === 'you' && a.at > index.mtime + 1000 && a.path.startsWith(path + '/') && fileKind(a.path) !== 'index');
@@ -87,6 +90,7 @@ export function FolderScreen({ path }: { path: string }) {
         { icon: 'note_add', label: 'Nuovo file', kbd: '⌘N', onPress: () => app.openDialog({ kind: 'newFile', dir: path }) },
         { icon: 'create_new_folder', label: 'Nuova cartella', kbd: '⇧⌘N', onPress: () => app.openDialog({ kind: 'newFolder', dir: path }) },
         { icon: 'upload_file', label: 'Carica file…', onPress: () => upload(path) },
+        { icon: 'drive_folder_upload', label: 'Carica cartella…', onPress: () => upload(path, undefined, { folder: true }) },
         ...(isProject && !checklist ? [{ icon: 'checklist', label: 'Crea checklist.md', onPress: () => app.ops.createFile(`${path}/checklist.md`, '## Da fare\n\n- [ ] \n') }] : []),
       ],
     });
@@ -186,6 +190,7 @@ export function FolderScreen({ path }: { path: string }) {
   
         <FileTable
           rows={rows}
+          pending={pending}
           columns={['size', 'modified', 'author']}
           empty={isProject ? 'Nessun altro file. Usa “Nuovo” per aggiungerne uno.' : 'Cartella vuota'}
         />
@@ -198,6 +203,37 @@ export function FolderScreen({ path }: { path: string }) {
       ) : null}
     </View>
   );
+}
+
+/**
+ * The grey rows of this folder: its own files on their way up, and one row per new folder that
+ * files are going into (with its files' bytes added up). Once a file or folder is in the tree the real row replaces it.
+ */
+function pendingHere(uploads: PendingUpload[], path: string, children: { path: string }[]): PendingUpload[] {
+  const rows: PendingUpload[] = [];
+  const folders = new Map<string, PendingUpload>();
+  for (const u of uploads) {
+    if (dirname(u.path) === path) {
+      if (!children.some((n) => n.path === u.path)) rows.push(u);
+      continue;
+    }
+    if (!u.path.startsWith(path + '/')) continue;
+    const name = u.path.slice(path.length + 1).split('/')[0];
+    const folder = `${path}/${name}`;
+    if (children.some((n) => n.path === folder)) continue;
+    const row = folders.get(folder);
+    if (row) {
+      row.size += u.size;
+      row.sent += u.sent;
+      row.files! += 1;
+      row.started ||= u.started;
+    } else {
+      const made = { id: u.id, path: folder, name: `${name}/`, size: u.size, sent: u.sent, started: u.started, files: 1 };
+      folders.set(folder, made);
+      rows.push(made);
+    }
+  }
+  return rows;
 }
 
 function SpecialCard({

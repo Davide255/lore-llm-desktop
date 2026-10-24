@@ -50,8 +50,10 @@ export async function request<T = any>(method: string, path: string, { query, bo
 export async function requestRaw(
   method: string,
   path: string,
-  { query, body, headers }: { query?: Query; body?: BodyInit; headers?: Record<string, string> } = {},
+  { query, body, headers, onProgress }: { query?: Query; body?: BodyInit; headers?: Record<string, string>; onProgress?: (sent: number, total: number) => void } = {},
 ): Promise<{ status: number; headers: Headers; json?: any; blob?: Blob }> {
+  // fetch cannot report upload progress: a body with a listener goes through XMLHttpRequest.
+  if (body instanceof Blob && onProgress) return putWithProgress(method, path, query, body, { 'content-type': 'application/octet-stream', ...headers }, onProgress);
   const res = await send(method, path, query, { body, headers: { ...(body !== undefined ? { 'content-type': 'application/octet-stream' } : {}), ...headers } });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -60,4 +62,26 @@ export async function requestRaw(
   const type = res.headers.get('content-type') ?? '';
   if (type.includes('application/json')) return { status: res.status, headers: res.headers, json: await res.json() };
   return { status: res.status, headers: res.headers, blob: await res.blob() };
+}
+
+async function putWithProgress(method: string, path: string, query: Query | undefined, body: Blob, headers: Record<string, string>, onProgress: (sent: number, total: number) => void) {
+  const token = await auth.idToken();
+  if (!token) throw new ApiError('Accesso richiesto', 401);
+  return new Promise<{ status: number; headers: Headers; json?: any }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, urlFor(path, query).toString());
+    xhr.setRequestHeader('authorization', `Bearer ${token}`);
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded, e.total);
+    xhr.onerror = () => reject(new ApiError('Server Lore non raggiungibile', 0));
+    xhr.onload = () => {
+      let data: any = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve({ status: xhr.status, headers: new Headers(), json: data });
+      else reject(new ApiError(message(xhr.status, data.error), xhr.status));
+    };
+    xhr.send(body);
+  });
 }

@@ -260,6 +260,12 @@ function createOta({ dir, appVersion, runtimeVersion, baseUrl, channel, publicKe
     await fsp.rename(tmp, final);
   }
 
+  /** Version of a downloaded bundle that the next launch will start from, null when there is none. */
+  function pendingVersion() {
+    const { pending: p, bad } = readState();
+    return p && p.appVersion === appVersion && !bad.includes(p.version) && bundleIntact(p.version) ? p.version : null;
+  }
+
   /** Looks for a newer bundle and downloads it. Resolves with the resulting phase; never throws. */
   async function check({ force = false } = {}) {
     if (!enabled || checking) return phase;
@@ -276,14 +282,18 @@ function createOta({ dir, appVersion, runtimeVersion, baseUrl, channel, publicKe
       const manifest = parseManifest(body);
 
       const s = readState();
-      if (!isNewer(manifest, { appVersion, runtimeVersion, loaded, pending: s.pending, bad: s.bad })) return emit('current');
+      if (!isNewer(manifest, { appVersion, runtimeVersion, loaded, pending: s.pending, bad: s.bad })) {
+        // Downloaded earlier and not applied yet: still an update waiting for a restart.
+        const waiting = pendingVersion();
+        return waiting ? emit('ready', { next: waiting }) : emit('current');
+      }
 
-      emit('downloading', { version: manifest.version });
+      emit('downloading', { next: manifest.version });
       await download(manifest);
       const next = readState();
       next.pending = { version: manifest.version, createdAt: manifest.createdAt, appVersion };
       writeState(next);
-      return emit('ready', { version: manifest.version });
+      return emit('ready', { next: manifest.version });
     } catch (e) {
       // Offline, server down, bad signature, tampered file…: keep what is running.
       console.warn('[ota] update check failed:', e?.message ?? e);
@@ -300,9 +310,11 @@ function createOta({ dir, appVersion, runtimeVersion, baseUrl, channel, publicKe
     channel,
     /** Version of the running downloaded bundle, null when the app runs its own. */
     version: loaded?.version ?? null,
+    /** Downloaded and waiting for a restart. */
+    pending: enabled ? pendingVersion() : null,
   });
 
-  return { init, entryPath, confirm, rollback, check, info };
+  return { init, entryPath, confirm, rollback, check, info, pendingVersion };
 }
 
 module.exports = { createOta, baseVersion, compareBase, verifySignature, safeRelPath, parseManifest, isNewer };

@@ -21,6 +21,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -201,11 +202,12 @@ const ftpOptions = () => {
   return { user, password, tls: process.env.OTA_FTP_TLS !== "0" };
 };
 
-// Files are content-hashed: an HTTP 200 on the public URL means it is already there.
-const alreadyOnline = async (url) => {
+// Files are content-hashed: an HTTP 200 with the right length on the public URL means it is already
+// there (a transfer that broke half way leaves a short file that also answers 200).
+const alreadyOnline = async (url, size) => {
   try {
     const res = await fetch(url, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(15000) });
-    return res.status === 200;
+    return res.status === 200 && Number(res.headers.get("content-length")) === size;
   } catch {
     return false;
   }
@@ -221,7 +223,7 @@ const upload = async (channel) => {
   const filesDir = path.join(dir, "files");
   let skipped = 0;
   for (const file of readdirSync(filesDir)) {
-    if (await alreadyOnline(`${otaConfig.baseUrl}/${channel}/files/${file}`)) {
+    if (await alreadyOnline(`${otaConfig.baseUrl}/${channel}/files/${file}`, statSync(path.join(filesDir, file)).size)) {
       skipped++;
       continue;
     }

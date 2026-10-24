@@ -86,7 +86,7 @@ function NavItem({ icon, label, active, badge, onPress }: { icon: string; label:
     >
       <Icon name={icon} size={19} filled={active} color={active ? c.purpleTint : c.ink2} />
       <Text style={[t(500, 13.5, 1, { color: active ? c.ink : c.ink2 }), { flex: 1 }]}>{label}</Text>
-      {badge ? <Pill label={String(badge)} bg={c.purple18} fg={c.purpleTint} style={{ paddingHorizontal: 7, paddingVertical: 2 }} /> : null}
+      {badge ? <Pill label={String(badge)} bg={c.purple18} fg={c.purpleTint} style={{ paddingHorizontal: 7, paddingVertical: 2, alignSelf: 'center' }} /> : null}
     </Hover>
   );
 }

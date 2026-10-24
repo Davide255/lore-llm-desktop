@@ -308,10 +308,11 @@ function createMirror({ request, requestRaw }) {
       return res.file;
     },
 
-    async putBlob(rel, buffer, { overwrite, ifMatch } = {}) {
+    async putBlob(rel, buffer, { overwrite, ifMatch, onProgress } = {}) {
       const res = await requestRaw('PUT', '/v1/blob', {
         query: { path: rel, ...(overwrite ? { overwrite: 1 } : {}) },
         body: buffer,
+        onProgress,
         headers: ifMatch ? { 'if-match': ifMatch } : {},
       });
       const file = res.json.file;

@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { isWeb, lore } from '../kb/bridge';
-import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, MyInvite, NewAgent, ObsidianStatus, Permission, Prefs, SignInProvider, Team, TeamRole, TreeNode, UploadFile, VaultStatus } from '../kb/types';
+import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, MyInvite, NewAgent, ObsidianStatus, PendingUpload, Permission, Prefs, SignInProvider, Team, TeamRole, TreeNode, UploadFile, VaultStatus } from '../kb/types';
 import { basename, dirname, fileKind, findNode, projectKeyOf, projectLabel as projectLabelOf, unloadedProject } from '../kb/paths';
 
 export type Route =
@@ -23,7 +23,8 @@ export type Dialog =
   | { kind: 'vaultSetup' }
   | { kind: 'vaultConfirm'; count: number; paths: string[] }
   | { kind: 'vaultDisable' }
-  | { kind: 'moveToTeam'; path: string };
+  | { kind: 'moveToTeam'; path: string }
+  | { kind: 'otaUpdate'; version: string };
 
 export type MenuItem =
   | 'sep'
@@ -73,6 +74,8 @@ interface AppCtx {
   setSelected: (p: string | null) => void;
   dialog: Dialog | null;
   openDialog: (d: Dialog | null) => void;
+  /** Restarts into the downloaded update (asks about unsaved edits first). */
+  restartForUpdate: () => void;
   searchOpen: boolean;
   setSearchOpen: (v: boolean) => void;
   /** Phone layout: the sidebar slid in over the content. */
@@ -124,6 +127,8 @@ interface AppCtx {
   loadAll: () => Promise<void>;
   /** Progress of loadAll, null when idle. */
   loadProgress: { done: number; total: number } | null;
+  /** Files uploading right now: shown greyed out in their folder until they are in the tree. */
+  uploads: PendingUpload[];
   /** The teams the user belongs to, with their role. */
   teams: Team[];
   refreshTeams: () => Promise<void>;
@@ -137,7 +142,7 @@ interface AppCtx {
     createFile: (path: string, content: string) => Promise<void>;
     createFolder: (path: string) => Promise<void>;
     /** Uploads files into a folder: the given ones, or picked with the system dialog. */
-    upload: (dir: string, files?: UploadFile[]) => Promise<void>;
+    upload: (dir: string, files?: UploadFile[], opts?: { folder?: boolean }) => Promise<void>;
     rename: (from: string, to: string) => Promise<void>;
     duplicate: (path: string) => Promise<void>;
     remove: (path: string) => Promise<void>;
@@ -185,6 +190,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [obsidian, setObsidian] = useState<ObsidianStatus>({ installed: false, registered: false });
   const [opening, setOpening] = useState<Set<string>>(new Set());
   const [loadProgress, setLoadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [invites, setInvites] = useState<MyInvite[]>([]);
   const editorRef = useRef<EditorHandle | null>(null);
@@ -264,8 +270,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const offAuth = lore.onAuthChanged(setUser);
     const offVault = lore.onVaultStatus(setVault);
     const offProgress = lore.onLoadProgress((p) => setLoadProgress((cur) => (cur ? p : cur)));
+    const offUpload = lore.onUpload((ev) =>
+      setUploads((list) => {
+        if (ev.type === 'plan') return [...list, ...ev.items.map((i) => ({ ...i, sent: 0, started: false }))];
+        if (ev.type === 'progress') return list.map((u) => (u.id === ev.id ? { ...u, sent: ev.sent, started: true } : u));
+        return list.filter((u) => u.id !== ev.id);
+      }),
+    );
     const offInvites = lore.onInvites(setInvites);
     return () => {
+      offUpload();
       offProgress();
       offInvites();
       offChanged();
@@ -331,6 +345,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     next();
   }, []);
+
+  const restartForUpdate = useCallback(
+    () =>
+      guard(async () => {
+        try {
+          if (!(await lore.otaApply())) toast({ icon: 'info', text: "Aggiornamento scaricato: si installa al prossimo avvio dell'app", ttl: 6000 });
+        } catch (e) {
+          fail(e);
+        }
+      }),
+    [guard, toast, fail],
+  );
 
   const navigate = useCallback(
     (r: Route, opts?: { force?: boolean }) => {
@@ -493,8 +519,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         });
         if (ok) navigate({ name: 'file', path, edit: fileKind(path) !== 'index' }, { force: true });
       },
-      upload: async (dir, files) => {
-        const res = await withSync(() => lore.upload(dir, files));
+      upload: async (dir, files, opts) => {
+        const res = await withSync(() => lore.upload(dir, files, opts));
         if (!res) return;
         const n = res.uploaded.length;
         if (n) toast({ icon: 'upload_file', text: n === 1 ? `Caricato ${basename(res.uploaded[0])}` : `Caricati ${n} file`, ttl: 3000 });
@@ -700,6 +726,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelected,
     dialog,
     openDialog,
+    restartForUpdate,
     searchOpen,
     setSearchOpen,
     drawerOpen,
@@ -741,6 +768,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     opening,
     loadAll,
     loadProgress,
+    uploads,
     teams,
     refreshTeams,
     invites,

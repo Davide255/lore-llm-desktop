@@ -982,47 +982,71 @@ handle('kb:create', async (rel, content) => {
   return true;
 });
 
-// Files from the user's disk into a folder: picked with a dialog, or handed over as bytes (drag and drop).
-handle('kb:upload', async (dir, dropped) => {
+let uploadSeq = 0;
+
+// Files or whole folders from the user's disk into a folder: picked with a dialog (`opts.folder` for folders), or handed over as bytes (drag and drop).
+handle('kb:upload', async (dir, dropped, opts) => {
   if (!dir) throw new Error('Scegli un progetto o una cartella dove caricare i file');
   checkNewProject(`${dir}/x`);
   assertWritable(dir);
   await ensureLoaded(dir);
   let items;
-  if (dropped?.length) items = dropped.map((d) => ({ name: String(d?.name ?? ''), size: d?.data instanceof ArrayBuffer || ArrayBuffer.isView(d?.data) ? d.data.byteLength : 0, read: async () => Buffer.from(d.data) }));
+  if (dropped?.length) items = dropped.map((d) => ({ name: String(d?.name ?? ''), size: d?.data instanceof ArrayBuffer || ArrayBuffer.isView(d?.data) ? d.data.byteLength : 0, dir: typeof d?.dir === 'string' ? d.dir : undefined, skip: typeof d?.skip === 'string' ? d.skip : undefined, read: async () => Buffer.from(d.data) }));
   else {
-    const res = await dialog.showOpenDialog(win, {
-      title: 'Carica file',
-      properties: ['openFile', 'multiSelections'],
-      filters: [{ name: 'Immagini, PDF e note', extensions: upload.PICKER_EXTENSIONS }],
-    });
+    const folder = !!opts?.folder;
+    const res = await dialog.showOpenDialog(win, folder
+      ? { title: 'Carica cartella', properties: ['openDirectory', 'multiSelections'] }
+      : { title: 'Carica file', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Immagini, PDF e note', extensions: upload.PICKER_EXTENSIONS }] });
     if (res.canceled) return { uploaded: [], skipped: [] };
     items = [];
     for (const p of res.filePaths) {
-      const size = (await fsp.stat(p).catch(() => null))?.size ?? 0;
-      items.push({ name: path.basename(p), size, read: () => fsp.readFile(p) });
+      if (folder) items.push(...(await upload.walkFolder(p, fsp)));
+      else {
+        const size = (await fsp.stat(p).catch(() => null))?.size ?? 0;
+        items.push({ name: path.basename(p), size, read: () => fsp.readFile(p) });
+      }
     }
   }
   const plan = upload.planUpload(dir, items, (rel) => mirror.has(rel));
   const skipped = [...plan.skipped];
   const uploaded = [];
-  for (const o of plan.ok) {
-    try {
-      const buffer = await items[o.index].read();
-      if (upload.extOf(o.name) === 'md') {
-        const content = buffer.toString('utf8');
-        const file = await mirror.putText(o.rel, content, { overwrite: false });
-        recordOwnWrite(o.rel, file.etag);
-        recordChange(o.rel, null, content, 'you');
-      } else await mirror.putBlob(o.rel, buffer, { overwrite: false });
-      uploaded.push(o.rel);
-    } catch (err) {
-      skipped.push({ name: items[o.index].name, reason: err.message });
+  // The window shows each file greyed out with a bar from the moment it is planned until it is really in the tree.
+  const ids = plan.ok.map(() => ++uploadSeq);
+  const open = new Set(ids);
+  const finish = (id) => open.delete(id) && send('kb:upload', { type: 'done', id });
+  send('kb:upload', { type: 'plan', items: plan.ok.map((o, i) => ({ id: ids[i], path: o.rel, name: o.name, size: items[o.index].size })) });
+  try {
+    for (const [i, o] of plan.ok.entries()) {
+      const id = ids[i];
+      let lastPct = -1;
+      const onProgress = (sent, total) => {
+        const pct = Math.floor((sent / total) * 100);
+        if (pct === lastPct) return;
+        lastPct = pct;
+        send('kb:upload', { type: 'progress', id, sent });
+      };
+      try {
+        const buffer = await items[o.index].read();
+        onProgress(0, 1);
+        if (upload.extOf(o.name) === 'md') {
+          const content = buffer.toString('utf8');
+          const file = await mirror.putText(o.rel, content, { overwrite: false });
+          recordOwnWrite(o.rel, file.etag);
+          recordChange(o.rel, null, content, 'you');
+          send('kb:upload', { type: 'progress', id, sent: items[o.index].size });
+        } else await mirror.putBlob(o.rel, buffer, { overwrite: false, onProgress });
+        uploaded.push(o.rel);
+      } catch (err) {
+        skipped.push({ name: items[o.index].name, reason: err.message });
+        finish(id);
+      }
     }
-  }
-  if (uploaded.length) {
-    await resync();
-    vault?.kick();
+    if (uploaded.length) {
+      await resync();
+      vault?.kick();
+    }
+  } finally {
+    ids.forEach(finish);
   }
   return { uploaded, skipped };
 });
@@ -1523,6 +1547,22 @@ handle('ota:ready', () => {
 });
 handle('ota:status', () => ota?.info() ?? { enabled: false, phase: 'idle', appVersion: app.getVersion(), channel: 'production', version: null });
 handle('ota:check', () => ota?.check({ force: true }));
+// Restart into the downloaded bundle. The session lives encrypted in userData (never in the renderer),
+// so a restart keeps the login; it is written out first, and if it cannot be kept we do not restart.
+handle('ota:apply', async () => {
+  if (!ota?.pendingVersion()) return false;
+  try {
+    await auth.flush();
+  } catch (err) {
+    console.warn('[ota] not restarting, the login would be lost:', err?.message ?? err);
+    return false;
+  }
+  // A Windows login item passes --hidden: an update the user just asked for must show the window.
+  app.relaunch({ args: process.argv.slice(1).filter((a) => a !== '--hidden') });
+  allowClose = true;
+  app.quit(); // before-quit pushes what the vault still has pending
+  return true;
+});
 handle('app:confirmClose', () => {
   allowClose = true;
   win?.close();

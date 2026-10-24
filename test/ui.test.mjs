@@ -35,7 +35,7 @@ after(async () => {
 });
 
 /** Installs a fake `window.lore`; every call is recorded in `window.__calls`. */
-function fakeBridge({ signedIn, vault = false }) {
+function fakeBridge({ signedIn, vault = false, ota = null }) {
   const now = Date.now();
   const claude = { id: 'a-claude', name: 'Claude', kind: 'claude', permission: 'write', scope: ['*'], createdAt: now - 3_600_000 };
   const hunk = (lines) => [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((l) => `+${l}`) }];
@@ -132,6 +132,27 @@ function fakeBridge({ signedIn, vault = false }) {
       return state.tree;
     }),
     onLoadProgress: () => () => {},
+    // Uploads: `upload` plans two files and stops half way through the first; the test drives the rest.
+    onUpload: (cb) => {
+      window.__uploadEmit = cb;
+      return () => {};
+    },
+    upload: rec('upload', async (dir, files, opts) => {
+      const size = 4_000_000;
+      if (opts?.folder) {
+        // A folder with a file in a subfolder: one grey row for the whole folder, bytes added up.
+        window.__uploadEmit({ type: 'plan', items: [{ id: 1, path: `${dir}/album/a.png`, name: 'a.png', size: 1000 }, { id: 2, path: `${dir}/album/sub/b.pdf`, name: 'b.pdf', size: 3000 }] });
+        window.__uploadEmit({ type: 'progress', id: 1, sent: 1000 });
+        window.__uploadEmit({ type: 'progress', id: 2, sent: 1000 });
+      } else {
+        window.__uploadEmit({ type: 'plan', items: [{ id: 1, path: `${dir}/big.pdf`, name: 'big.pdf', size }, { id: 2, path: `${dir}/next.png`, name: 'next.png', size: 1000 }] });
+        window.__uploadEmit({ type: 'progress', id: 1, sent: size / 2 });
+      }
+      await new Promise((r) => (window.__finishUpload = r));
+      window.__uploadEmit({ type: 'done', id: 1 });
+      window.__uploadEmit({ type: 'done', id: 2 });
+      return { uploaded: [], skipped: [] };
+    }),
     onInvites: () => () => {},
     teams: rec('teams', async () => state.teams),
     team: rec('team', async (id) => state.teams.find((t) => t.id === id)),
@@ -215,14 +236,24 @@ function fakeBridge({ signedIn, vault = false }) {
     onVaultConfirm: noop,
     onVaultNotice: noop,
     onNavigate: noop,
+    otaReady: async () => {},
+    otaStatus: async () => ota?.info ?? { enabled: false, phase: 'idle', appVersion: '', channel: 'production', version: null },
+    // `ota.result`: what a manual check finds ('ready' = a new version was downloaded).
+    otaCheck: rec('otaCheck', async () => {
+      if (!ota) return 'idle';
+      ota.info = ota.result === 'ready' ? { ...ota.info, phase: 'ready', next: '1.0.7', pending: '1.0.7' } : { ...ota.info, phase: ota.result };
+      return ota.result;
+    }),
+    otaApply: rec('otaApply', async () => true),
+    onOtaStatus: noop,
   };
 }
 
-async function open({ signedIn = true, vault = false } = {}) {
+async function open({ signedIn = true, vault = false, ota = null } = {}) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(fakeBridge, { signedIn, vault });
+  await page.addInitScript(fakeBridge, { signedIn, vault, ota });
   await page.goto(url);
   return { page, errors };
 }
@@ -352,6 +383,75 @@ test('attachments open in their own screen', async () => {
   await page.getByText('Usato in').waitFor();
   await page.getByText('Apri', { exact: true }).click();
   assert.deepEqual(await calls(page, 'openAttachment'), [['Athly/pic.png']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('uploading: the file shows greyed out with a bar and its percentage until it is done', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Athly', { exact: true }).first().click();
+  await page.getByText('Nuovo', { exact: true }).click();
+  await page.getByText('Carica file…').click();
+  const big = page.getByRole('progressbar', { name: /big\.pdf/ });
+  await big.waitFor();
+  assert.match(await big.innerText(), /50%/);
+  assert.match(await big.innerText(), /Caricamento/);
+  const next = page.getByRole('progressbar', { name: /next\.png/ });
+  assert.match(await next.innerText(), /In attesa/);
+  assert.match(await next.innerText(), /0%/);
+  await shot(page, 'upload-progress');
+  // Greyed rows are not links: clicking one goes nowhere.
+  await big.click();
+  assert.equal(await page.getByText('Nuovo', { exact: true }).count(), 1);
+  await page.evaluate(() => window.__finishUpload());
+  await big.waitFor({ state: 'detached' });
+  assert.equal(await page.getByRole('progressbar').count(), 0);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('uploading a folder: one greyed row for the folder with the bytes of all its files', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Athly', { exact: true }).first().click();
+  await page.getByText('Nuovo', { exact: true }).click();
+  await page.getByText('Carica cartella…').click();
+  const row = page.getByRole('progressbar', { name: /album/ });
+  await row.waitFor();
+  // 2000 of 4000 bytes sent across a.png and sub/b.pdf.
+  assert.match(await row.innerText(), /50%/);
+  assert.match(await row.innerText(), /2 file/);
+  assert.equal(await page.getByRole('progressbar').count(), 1, 'the files inside are not listed one by one');
+  assert.deepEqual((await calls(page, 'upload'))[0].slice(1), [undefined, { folder: true }]);
+  await page.evaluate(() => window.__finishUpload());
+  await row.waitFor({ state: 'detached' });
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('dropping a folder walks it: subfolders kept, hidden files dropped, other types left unread', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Athly', { exact: true }).first().click();
+  await page.getByText('Nuovo', { exact: true }).waitFor();
+  await page.evaluate(() => {
+    const file = (name, text) => ({ isFile: true, isDirectory: false, name, file: (ok) => ok(new File([text], name)) });
+    const dir = (name, kids) => ({
+      isFile: false,
+      isDirectory: true,
+      name,
+      createReader: () => {
+        let done = false;
+        return { readEntries: (ok) => ok(done ? [] : ((done = true), kids)) };
+      },
+    });
+    const album = dir('album', [file('a.png', 'aaa'), file('.DS_Store', 'x'), file('clip.mp4', 'video'), dir('sub', [file('n.md', 'hello')]), dir('.git', [file('c.md', 'x')])]);
+    const event = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { types: ['Files'], files: [], items: [{ kind: 'file', webkitGetAsEntry: () => album }] } });
+    document.dispatchEvent(event);
+  });
+  await page.waitForFunction(() => window.__calls.some((c) => c.name === 'upload'));
+  const [, files] = (await calls(page, 'upload'))[0];
+  assert.deepEqual(files.map((f) => [f.dir, f.name, f.skip ? 'skipped' : 'read']), [['album', 'a.png', 'read'], ['album', 'clip.mp4', 'skipped'], ['album/sub', 'n.md', 'read']]);
+  await page.evaluate(() => window.__finishUpload?.());
   assert.deepEqual(errors, []);
   await page.close();
 });
@@ -489,6 +589,58 @@ test('obsidian: status, "Apri in Obsidian" and the default editor', async () => 
   await page.getByLabel('Apri in Obsidian').click();
   await page.getByText('Modifica in Obsidian').click();
   assert.deepEqual(await calls(page, 'openInObsidian'), [['Athly/Test.md'], ['Athly/Test.md']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('the unseen-activity badge is centred in its sidebar row', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Attività', { exact: true }).first().waitFor();
+  const off = await page.evaluate(() => {
+    const label = [...document.querySelectorAll('div')].find((d) => d.children.length === 0 && d.textContent === 'Attività');
+    const row = label.parentElement;
+    const badge = [...row.querySelectorAll('div')].find((d) => d.children.length === 0 && /^\d+$/.test(d.textContent)).parentElement;
+    const r = row.getBoundingClientRect();
+    const b = badge.getBoundingClientRect();
+    return Math.abs(r.top + r.height / 2 - (b.top + b.height / 2));
+  });
+  assert.ok(off < 1, `badge is ${off}px off the row centre`);
+  await shot(page, '4-sidebar-badge');
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+const OTA_INFO = { enabled: true, phase: 'idle', appVersion: '1.0.6', channel: 'production', version: null, pending: null };
+
+test('checking for updates: a new version is downloaded and the user is asked to restart', async () => {
+  const { page, errors } = await open({ ota: { info: OTA_INFO, result: 'ready' } });
+  await page.getByText('Impostazioni', { exact: true }).first().click();
+  await page.getByText('Generale', { exact: true }).first().click();
+  await page.getByText('Controlla', { exact: true }).click();
+  await page.getByText('Nuova versione pronta').waitFor();
+  await page.getByText('Vuoi aggiornare adesso?', { exact: false }).waitFor();
+  await shot(page, '5-update-dialog');
+  // "Più tardi" keeps working and leaves a restart button next to the check.
+  await page.getByText('Più tardi', { exact: true }).click();
+  await page.getByText('Riavvia e aggiorna', { exact: true }).waitFor();
+  assert.deepEqual(await calls(page, 'otaApply'), [], 'nothing restarts until the user says so');
+  // "Sì": the main process is asked to restart.
+  await page.getByText('Controlla', { exact: true }).click();
+  await page.getByText('Nuova versione pronta').waitFor();
+  await page.getByText('Riavvia e aggiorna', { exact: true }).last().click();
+  await page.waitForFunction(() => window.__calls.some((c) => c.name === 'otaApply'));
+  assert.deepEqual(await calls(page, 'otaApply'), [[]]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('checking for updates: already up to date says so', async () => {
+  const { page, errors } = await open({ ota: { info: OTA_INFO, result: 'current' } });
+  await page.getByText('Impostazioni', { exact: true }).first().click();
+  await page.getByText('Generale', { exact: true }).first().click();
+  await page.getByText('Controlla', { exact: true }).click();
+  await page.getByText("Sei già all'ultima versione").waitFor();
+  assert.equal(await page.getByText('Nuova versione pronta').count(), 0);
   assert.deepEqual(errors, []);
   await page.close();
 });

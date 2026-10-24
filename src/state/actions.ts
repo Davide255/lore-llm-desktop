@@ -50,6 +50,7 @@ export function itemMenu(app: App, path: string): MenuItem[] {
     items.push({ icon: 'note_add', label: 'Nuovo file qui', kbd: '⌘N', onPress: () => app.openDialog({ kind: 'newFile', dir: path }) });
     items.push({ icon: 'create_new_folder', label: 'Nuova cartella', onPress: () => app.openDialog({ kind: 'newFolder', dir: path }) });
     items.push({ icon: 'upload_file', label: 'Carica file…', onPress: () => app.ops.upload(path) });
+    items.push({ icon: 'drive_folder_upload', label: 'Carica cartella…', onPress: () => app.ops.upload(path, undefined, { folder: true }) });
   }
   sep();
   add('rename', { icon: 'drive_file_rename_outline', label: 'Rinomina', kbd: 'F2', onPress: () => app.openDialog({ kind: 'rename', path }) });
