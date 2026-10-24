@@ -16,6 +16,7 @@ const { scoped, teamOf, projectOf, checkProjectName, canWrite } = require('./spa
 const { VaultSync, scanVault, planSync, folderNames, kindOf } = require('./vault.cjs');
 const obsidian = require('./obsidian.cjs');
 const background = require('./background.cjs');
+const upload = require('./upload.cjs');
 const { createOta } = require('./ota.cjs');
 const otaConfig = require('./ota.config.json');
 
@@ -979,6 +980,51 @@ handle('kb:create', async (rel, content) => {
   await resync();
   vault?.kick();
   return true;
+});
+
+// Files from the user's disk into a folder: picked with a dialog, or handed over as bytes (drag and drop).
+handle('kb:upload', async (dir, dropped) => {
+  if (!dir) throw new Error('Scegli un progetto o una cartella dove caricare i file');
+  checkNewProject(`${dir}/x`);
+  assertWritable(dir);
+  await ensureLoaded(dir);
+  let items;
+  if (dropped?.length) items = dropped.map((d) => ({ name: String(d?.name ?? ''), size: d?.data instanceof ArrayBuffer || ArrayBuffer.isView(d?.data) ? d.data.byteLength : 0, read: async () => Buffer.from(d.data) }));
+  else {
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Carica file',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Immagini, PDF e note', extensions: upload.PICKER_EXTENSIONS }],
+    });
+    if (res.canceled) return { uploaded: [], skipped: [] };
+    items = [];
+    for (const p of res.filePaths) {
+      const size = (await fsp.stat(p).catch(() => null))?.size ?? 0;
+      items.push({ name: path.basename(p), size, read: () => fsp.readFile(p) });
+    }
+  }
+  const plan = upload.planUpload(dir, items, (rel) => mirror.has(rel));
+  const skipped = [...plan.skipped];
+  const uploaded = [];
+  for (const o of plan.ok) {
+    try {
+      const buffer = await items[o.index].read();
+      if (upload.extOf(o.name) === 'md') {
+        const content = buffer.toString('utf8');
+        const file = await mirror.putText(o.rel, content, { overwrite: false });
+        recordOwnWrite(o.rel, file.etag);
+        recordChange(o.rel, null, content, 'you');
+      } else await mirror.putBlob(o.rel, buffer, { overwrite: false });
+      uploaded.push(o.rel);
+    } catch (err) {
+      skipped.push({ name: items[o.index].name, reason: err.message });
+    }
+  }
+  if (uploaded.length) {
+    await resync();
+    vault?.kick();
+  }
+  return { uploaded, skipped };
 });
 
 // Object storage has no empty folders: they live here (and in the vault) until a file is put in them.

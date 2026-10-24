@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('lore', {
   read: call('kb:read'),
   write: call('kb:write'),
   create: call('kb:create'),
+  upload: call('kb:upload'),
   mkdir: call('kb:mkdir'),
   rename: call('kb:rename'),
   duplicate: call('kb:duplicate'),

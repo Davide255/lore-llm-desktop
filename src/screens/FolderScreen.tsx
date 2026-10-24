@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { c, font, radius, t } from '../theme';
 import { useApp } from '../state/app';
@@ -19,6 +19,48 @@ export function FolderScreen({ path }: { path: string }) {
   const moreRef = useRef<View>(null);
   const compact = useCompact();
   const pad = usePad();
+  const [dragging, setDragging] = useState(false);
+  const writable = !!node && node.kind === 'folder' && canWrite(app.accessOf(path));
+  const { upload } = app.ops;
+
+  // Files dragged from the desktop onto the folder.
+  useEffect(() => {
+    if (!writable || typeof document === 'undefined') return;
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+    let depth = 0;
+    const enter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth++;
+      setDragging(true);
+    };
+    const over = (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault();
+    };
+    const leave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) setDragging(false);
+    };
+    const drop = async (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      setDragging(false);
+      const files = await Promise.all([...(e.dataTransfer?.files ?? [])].map(async (f) => ({ name: f.name, data: await f.arrayBuffer() })));
+      if (files.length) upload(path, files);
+    };
+    document.addEventListener('dragenter', enter);
+    document.addEventListener('dragover', over);
+    document.addEventListener('dragleave', leave);
+    document.addEventListener('drop', drop);
+    return () => {
+      document.removeEventListener('dragenter', enter);
+      document.removeEventListener('dragover', over);
+      document.removeEventListener('dragleave', leave);
+      document.removeEventListener('drop', drop);
+    };
+  }, [writable, path, upload]);
 
   if (!node || node.kind !== 'folder') {
     return <EmptyState icon="folder_off" title="Cartella non trovata" body={`${path} non esiste più.`} action={{ label: 'Torna ai progetti', onPress: () => app.navigate({ name: 'projects' }) }} />;
@@ -44,108 +86,117 @@ export function FolderScreen({ path }: { path: string }) {
       items: [
         { icon: 'note_add', label: 'Nuovo file', kbd: '⌘N', onPress: () => app.openDialog({ kind: 'newFile', dir: path }) },
         { icon: 'create_new_folder', label: 'Nuova cartella', kbd: '⇧⌘N', onPress: () => app.openDialog({ kind: 'newFolder', dir: path }) },
+        { icon: 'upload_file', label: 'Carica file…', onPress: () => upload(path) },
         ...(isProject && !checklist ? [{ icon: 'checklist', label: 'Crea checklist.md', onPress: () => app.ops.createFile(`${path}/checklist.md`, '## Da fare\n\n- [ ] \n') }] : []),
       ],
     });
   };
 
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: compact ? 24 : 34, paddingHorizontal: pad, gap: 24 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 10 }}>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            <Text numberOfLines={1} style={[t(700, 28, 1.15, { letterSpacing: -0.98 }), { flexShrink: 1 }]}>
-              {node.name}
+    <View style={{ flex: 1 }}>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: compact ? 24 : 34, paddingHorizontal: pad, gap: 24 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 10 }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Text numberOfLines={1} style={[t(700, 28, 1.15, { letterSpacing: -0.98 }), { flexShrink: 1 }]}>
+                {node.name}
+              </Text>
+              {team ? <TeamPill name={team.name} /> : null}
+            </View>
+            <Text numberOfLines={1} style={t(400, 13.5, 1.2, { color: c.ink3, marginTop: 9 })}>
+              {[index?.summary, `${n} file`, `modificato ${relTime(node.mtime)}`].filter(Boolean).join(' · ')}
             </Text>
-            {team ? <TeamPill name={team.name} /> : null}
           </View>
-          <Text numberOfLines={1} style={t(400, 13.5, 1.2, { color: c.ink3, marginTop: 9 })}>
-            {[index?.summary, `${n} file`, `modificato ${relTime(node.mtime)}`].filter(Boolean).join(' · ')}
-          </Text>
-        </View>
-        <View ref={moreRef}>
-          <IconBtn
-            icon="more_horiz"
-            onPress={() => {
-              const a = anchorBelow(moreRef.current);
-              openItemMenu(app, path, a.x + a.width - 250, a.y);
-            }}
-          />
-        </View>
-        {viewer ? null : (
-          <View ref={newRef}>
-            <Btn variant="primary" icon="add" label="Nuovo" iconRight="expand_more" onPress={openNewMenu} />
-          </View>
-        )}
-      </View>
-
-      {viewer ? (
-        <InfoStrip icon="lock">
-          <Text style={t(400, 12.5, 1.45, { color: c.ink2 })}>
-            Sei in sola lettura in questo progetto del team: puoi leggere e cercare, non modificare. Un proprietario del team può cambiare il tuo ruolo.
-          </Text>
-        </InfoStrip>
-      ) : null}
-
-      {isProject ? (
-        <View style={{ flexDirection: compact ? 'column' : 'row', gap: compact ? 10 : 14 }}>
-          {index ? (
-            <SpecialCard
-              node={index}
-              icon="auto_awesome"
-              tint="info"
-              subtitle={stale ? 'In attesa di rigenerazione…' : `Generato · sola lettura · ${relTime(index.mtime)}`}
-              subtitleColor={stale ? c.info : undefined}
-              trailing={<Icon name={stale ? 'sync' : 'lock'} size={16} color={stale ? c.info : c.ink3} />}
+          <View ref={moreRef}>
+            <IconBtn
+              icon="more_horiz"
+              onPress={() => {
+                const a = anchorBelow(moreRef.current);
+                openItemMenu(app, path, a.x + a.width - 250, a.y);
+              }}
             />
-          ) : (
-            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 16, borderRadius: radius.card, borderWidth: 1, borderStyle: 'dashed', borderColor: c.hair }}>
-              <IconWell icon="auto_awesome" tint="info" />
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontFamily: font.mono, fontSize: 13.5, fontWeight: '500', color: c.ink2 }}>index.md</Text>
-                <Text style={t(400, 12, 1.3, { color: c.ink3, marginTop: 3 })}>Non ancora generato dagli agenti</Text>
-              </View>
+          </View>
+          {viewer ? null : (
+            <View ref={newRef}>
+              <Btn variant="primary" icon="add" label="Nuovo" iconRight="expand_more" onPress={openNewMenu} />
             </View>
           )}
-          {checklist ? (
-            <SpecialCard
-              node={checklist}
-              icon="checklist"
-              tint="purple"
-              body={
-                checklist.total ? (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 7 }}>
-                    <Progress value={checklist.done! / checklist.total} />
-                    <Text style={t(600, 11, 1, { color: c.ink3 })}>
-                      {checklist.done}/{checklist.total}
-                    </Text>
-                  </View>
-                ) : (
-                  <Text style={t(400, 12, 1.3, { color: c.ink3, marginTop: 3 })}>Nessuna voce</Text>
-                )
-              }
-            />
-          ) : viewer ? null : (
-            <Hover
-              onPress={() => app.ops.createFile(`${path}/checklist.md`, '## Da fare\n\n- [ ] \n')}
-              style={({ hovered }) => ({ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 16, borderRadius: radius.card, borderWidth: 1, borderStyle: 'dashed', borderColor: hovered ? c.purple40 : c.hair })}
-            >
-              <IconWell icon="add_task" tint="purple" />
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontFamily: font.mono, fontSize: 13.5, fontWeight: '500', color: c.ink2 }}>checklist.md</Text>
-                <Text style={t(400, 12, 1.3, { color: c.ink3, marginTop: 3 })}>Crea la checklist del progetto</Text>
+        </View>
+  
+        {viewer ? (
+          <InfoStrip icon="lock">
+            <Text style={t(400, 12.5, 1.45, { color: c.ink2 })}>
+              Sei in sola lettura in questo progetto del team: puoi leggere e cercare, non modificare. Un proprietario del team può cambiare il tuo ruolo.
+            </Text>
+          </InfoStrip>
+        ) : null}
+  
+        {isProject ? (
+          <View style={{ flexDirection: compact ? 'column' : 'row', gap: compact ? 10 : 14 }}>
+            {index ? (
+              <SpecialCard
+                node={index}
+                icon="auto_awesome"
+                tint="info"
+                subtitle={stale ? 'In attesa di rigenerazione…' : `Generato · sola lettura · ${relTime(index.mtime)}`}
+                subtitleColor={stale ? c.info : undefined}
+                trailing={<Icon name={stale ? 'sync' : 'lock'} size={16} color={stale ? c.info : c.ink3} />}
+              />
+            ) : (
+              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 16, borderRadius: radius.card, borderWidth: 1, borderStyle: 'dashed', borderColor: c.hair }}>
+                <IconWell icon="auto_awesome" tint="info" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontFamily: font.mono, fontSize: 13.5, fontWeight: '500', color: c.ink2 }}>index.md</Text>
+                  <Text style={t(400, 12, 1.3, { color: c.ink3, marginTop: 3 })}>Non ancora generato dagli agenti</Text>
+                </View>
               </View>
-            </Hover>
-          )}
+            )}
+            {checklist ? (
+              <SpecialCard
+                node={checklist}
+                icon="checklist"
+                tint="purple"
+                body={
+                  checklist.total ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 7 }}>
+                      <Progress value={checklist.done! / checklist.total} />
+                      <Text style={t(600, 11, 1, { color: c.ink3 })}>
+                        {checklist.done}/{checklist.total}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={t(400, 12, 1.3, { color: c.ink3, marginTop: 3 })}>Nessuna voce</Text>
+                  )
+                }
+              />
+            ) : viewer ? null : (
+              <Hover
+                onPress={() => app.ops.createFile(`${path}/checklist.md`, '## Da fare\n\n- [ ] \n')}
+                style={({ hovered }) => ({ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 16, borderRadius: radius.card, borderWidth: 1, borderStyle: 'dashed', borderColor: hovered ? c.purple40 : c.hair })}
+              >
+                <IconWell icon="add_task" tint="purple" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontFamily: font.mono, fontSize: 13.5, fontWeight: '500', color: c.ink2 }}>checklist.md</Text>
+                  <Text style={t(400, 12, 1.3, { color: c.ink3, marginTop: 3 })}>Crea la checklist del progetto</Text>
+                </View>
+              </Hover>
+            )}
+          </View>
+        ) : null}
+  
+        <FileTable
+          rows={rows}
+          columns={['size', 'modified', 'author']}
+          empty={isProject ? 'Nessun altro file. Usa “Nuovo” per aggiungerne uno.' : 'Cartella vuota'}
+        />
+      </ScrollView>
+      {dragging ? (
+        <View pointerEvents="none" style={{ position: 'absolute', top: 10, left: 10, right: 10, bottom: 10, borderRadius: radius.lg, borderWidth: 2, borderStyle: 'dashed', borderColor: c.purpleTint, backgroundColor: c.purple16, alignItems: 'center', justifyContent: 'center', gap: 8, zIndex: 20 }}>
+          <Icon name="upload_file" size={34} color={c.purpleTint} />
+          <Text style={t(600, 15, 1.2, { color: c.ink })}>Rilascia per caricare in {node.name}</Text>
         </View>
       ) : null}
-
-      <FileTable
-        rows={rows}
-        columns={['size', 'modified', 'author']}
-        empty={isProject ? 'Nessun altro file. Usa “Nuovo” per aggiungerne uno.' : 'Cartella vuota'}
-      />
-    </ScrollView>
+    </View>
   );
 }
 
