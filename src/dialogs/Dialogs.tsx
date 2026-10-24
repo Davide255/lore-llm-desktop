@@ -35,6 +35,8 @@ export function DialogHost() {
       return <VaultDisableDialog onClose={close} />;
     case 'moveToTeam':
       return <MoveToTeamDialog path={dialog.path} onClose={close} />;
+    case 'otaUpdate':
+      return <OtaUpdateDialog version={dialog.version} onClose={close} />;
   }
 }
 
@@ -318,6 +320,28 @@ function DeleteDialog({ path, onClose }: { path: string; onClose: () => void }) 
 // ---------------------------------------------------------------------------
 // B2 · Chiusura con modifiche
 // ---------------------------------------------------------------------------
+function OtaUpdateDialog({ version, onClose }: { version: string; onClose: () => void }) {
+  const app = useApp();
+  const update = () => {
+    onClose();
+    app.restartForUpdate();
+  };
+  return (
+    <DialogFrame width={460} onDismiss={onClose} onSubmit={update}>
+      <View style={{ padding: 24, paddingBottom: 20 }}>
+        <Text style={t(600, 18, 1.3, { letterSpacing: -0.36, marginBottom: 8 })}>Nuova versione pronta</Text>
+        <Text style={t(400, 13.5, 1.55, { color: c.ink2 })}>
+          La versione <Text style={{ fontFamily: font.mono }}>{version}</Text> è stata scaricata. Vuoi aggiornare adesso? L'app si riavvia e resti connesso al tuo account.
+        </Text>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 20, paddingBottom: 20, justifyContent: 'flex-end' }}>
+        <Btn label="Più tardi" onPress={onClose} />
+        <Btn variant="primary" label="Riavvia e aggiorna" kbd="⏎" onPress={update} />
+      </View>
+    </DialogFrame>
+  );
+}
+
 function UnsavedDialog({ next, onClose }: { next: () => void; onClose: () => void }) {
   const app = useApp();
   const ed = app.editorRef.current;

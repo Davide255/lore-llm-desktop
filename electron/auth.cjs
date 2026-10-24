@@ -52,6 +52,16 @@ async function persist() {
   await fsp.writeFile(storePath(), safeStorage.encryptString(JSON.stringify(session)));
 }
 
+/** The session survives a restart: it is (or will be) on disk, or there is none to keep. */
+const canPersist = () => !session || safeStorage.isEncryptionAvailable();
+
+/** Writes the current session to disk now (before a restart for an update). Rejects if it cannot. */
+async function flush() {
+  if (!session) return;
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Il login non può essere salvato su disco');
+  await persist();
+}
+
 // ---------------------------------------------------------------------------
 // Tokens
 // ---------------------------------------------------------------------------
@@ -266,4 +276,4 @@ function init(changed) {
   load();
 }
 
-module.exports = { init, user, idToken, signIn, cancelSignIn, signOut };
+module.exports = { init, user, idToken, signIn, cancelSignIn, signOut, canPersist, flush };

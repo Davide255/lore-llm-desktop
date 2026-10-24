@@ -23,7 +23,8 @@ export type Dialog =
   | { kind: 'vaultSetup' }
   | { kind: 'vaultConfirm'; count: number; paths: string[] }
   | { kind: 'vaultDisable' }
-  | { kind: 'moveToTeam'; path: string };
+  | { kind: 'moveToTeam'; path: string }
+  | { kind: 'otaUpdate'; version: string };
 
 export type MenuItem =
   | 'sep'
@@ -73,6 +74,8 @@ interface AppCtx {
   setSelected: (p: string | null) => void;
   dialog: Dialog | null;
   openDialog: (d: Dialog | null) => void;
+  /** Restarts into the downloaded update (asks about unsaved edits first). */
+  restartForUpdate: () => void;
   searchOpen: boolean;
   setSearchOpen: (v: boolean) => void;
   /** Phone layout: the sidebar slid in over the content. */
@@ -342,6 +345,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     next();
   }, []);
+
+  const restartForUpdate = useCallback(
+    () =>
+      guard(async () => {
+        try {
+          if (!(await lore.otaApply())) toast({ icon: 'info', text: "Aggiornamento scaricato: si installa al prossimo avvio dell'app", ttl: 6000 });
+        } catch (e) {
+          fail(e);
+        }
+      }),
+    [guard, toast, fail],
+  );
 
   const navigate = useCallback(
     (r: Route, opts?: { force?: boolean }) => {
@@ -711,6 +726,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelected,
     dialog,
     openDialog,
+    restartForUpdate,
     searchOpen,
     setSearchOpen,
     drawerOpen,

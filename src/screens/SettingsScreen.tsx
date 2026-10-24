@@ -140,21 +140,40 @@ function General() {
 const OTA_STATUS: Record<OtaPhase, string> = {
   idle: 'Nessun controllo',
   checking: 'Controllo…',
-  downloading: 'Download in corso…',
-  ready: "Scaricato: si installa al prossimo avvio dell'app",
+  downloading: 'Nuova versione trovata: download in corso…',
+  ready: 'Nuova versione scaricata: pronta da installare',
   current: 'Aggiornato',
   error: 'Impossibile controllare',
 };
 
-/** Live updates (docs/OTA.md): the app build, the downloaded bundle it runs, and a manual check. */
+/** Live updates (docs/OTA.md): the app build, the downloaded bundle it runs, and a manual check that offers to restart. */
 function Updates() {
+  const app = useApp();
   const [info, setInfo] = useState<OtaInfo | null>(null);
+  const [checking, setChecking] = useState(false);
   useEffect(() => {
     lore.otaStatus().then(setInfo).catch(() => {});
     return lore.onOtaStatus(setInfo);
   }, []);
   if (!info) return null;
-  const busy = info.phase === 'checking' || info.phase === 'downloading';
+  const waiting = info.pending ?? (info.phase === 'ready' ? info.next : undefined);
+  const busy = checking || info.phase === 'checking' || info.phase === 'downloading';
+  const check = async () => {
+    setChecking(true);
+    try {
+      const phase = await lore.otaCheck();
+      const next = await lore.otaStatus();
+      setInfo(next);
+      const version = next.pending ?? next.next;
+      if (phase === 'ready' && version) app.openDialog({ kind: 'otaUpdate', version });
+      else if (phase === 'current') app.toast({ icon: 'check_circle', text: "Sei già all'ultima versione", ttl: 4000 });
+      else if (phase === 'error') app.toast({ icon: 'error', text: 'Impossibile controllare gli aggiornamenti: riprova tra poco', ttl: 5000 });
+    } catch (e) {
+      app.toast({ icon: 'error', text: e instanceof Error ? e.message : String(e), ttl: 5000 });
+    } finally {
+      setChecking(false);
+    }
+  };
   return (
     <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
       <IconWell icon="system_update" tint="blue" />
@@ -165,13 +184,18 @@ function Updates() {
           {info.version ? ` · ${info.version}` : ''}
         </Text>
         <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 4 })}>
-          {info.enabled ? OTA_STATUS[info.phase] : 'Disattivati in questa build'}
+          {!info.enabled ? 'Disattivati in questa build' : waiting && !busy ? `Versione ${waiting} scaricata: pronta da installare` : OTA_STATUS[info.phase]}
         </Text>
       </View>
       {busy ? (
         <Spinner />
       ) : (
-        info.enabled && <Btn icon="refresh" label="Controlla" onPress={() => lore.otaCheck().catch(() => {})} />
+        info.enabled && (
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Btn icon="refresh" label="Controlla" onPress={check} />
+            {waiting ? <Btn variant="primary" icon="restart_alt" label="Riavvia e aggiorna" onPress={() => app.restartForUpdate()} /> : null}
+          </View>
+        )
       )}
     </Card>
   );

@@ -35,7 +35,7 @@ after(async () => {
 });
 
 /** Installs a fake `window.lore`; every call is recorded in `window.__calls`. */
-function fakeBridge({ signedIn, vault = false }) {
+function fakeBridge({ signedIn, vault = false, ota = null }) {
   const now = Date.now();
   const claude = { id: 'a-claude', name: 'Claude', kind: 'claude', permission: 'write', scope: ['*'], createdAt: now - 3_600_000 };
   const hunk = (lines) => [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((l) => `+${l}`) }];
@@ -237,16 +237,23 @@ function fakeBridge({ signedIn, vault = false }) {
     onVaultNotice: noop,
     onNavigate: noop,
     otaReady: async () => {},
-    otaStatus: async () => ({ enabled: false, phase: 'idle', appVersion: '', channel: 'production', version: null }),
+    otaStatus: async () => ota?.info ?? { enabled: false, phase: 'idle', appVersion: '', channel: 'production', version: null },
+    // `ota.result`: what a manual check finds ('ready' = a new version was downloaded).
+    otaCheck: rec('otaCheck', async () => {
+      if (!ota) return 'idle';
+      ota.info = ota.result === 'ready' ? { ...ota.info, phase: 'ready', next: '1.0.7', pending: '1.0.7' } : { ...ota.info, phase: ota.result };
+      return ota.result;
+    }),
+    otaApply: rec('otaApply', async () => true),
     onOtaStatus: noop,
   };
 }
 
-async function open({ signedIn = true, vault = false } = {}) {
+async function open({ signedIn = true, vault = false, ota = null } = {}) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(fakeBridge, { signedIn, vault });
+  await page.addInitScript(fakeBridge, { signedIn, vault, ota });
   await page.goto(url);
   return { page, errors };
 }
@@ -582,6 +589,58 @@ test('obsidian: status, "Apri in Obsidian" and the default editor', async () => 
   await page.getByLabel('Apri in Obsidian').click();
   await page.getByText('Modifica in Obsidian').click();
   assert.deepEqual(await calls(page, 'openInObsidian'), [['Athly/Test.md'], ['Athly/Test.md']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('the unseen-activity badge is centred in its sidebar row', async () => {
+  const { page, errors } = await open();
+  await page.getByText('Attività', { exact: true }).first().waitFor();
+  const off = await page.evaluate(() => {
+    const label = [...document.querySelectorAll('div')].find((d) => d.children.length === 0 && d.textContent === 'Attività');
+    const row = label.parentElement;
+    const badge = [...row.querySelectorAll('div')].find((d) => d.children.length === 0 && /^\d+$/.test(d.textContent)).parentElement;
+    const r = row.getBoundingClientRect();
+    const b = badge.getBoundingClientRect();
+    return Math.abs(r.top + r.height / 2 - (b.top + b.height / 2));
+  });
+  assert.ok(off < 1, `badge is ${off}px off the row centre`);
+  await shot(page, '4-sidebar-badge');
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+const OTA_INFO = { enabled: true, phase: 'idle', appVersion: '1.0.6', channel: 'production', version: null, pending: null };
+
+test('checking for updates: a new version is downloaded and the user is asked to restart', async () => {
+  const { page, errors } = await open({ ota: { info: OTA_INFO, result: 'ready' } });
+  await page.getByText('Impostazioni', { exact: true }).first().click();
+  await page.getByText('Generale', { exact: true }).first().click();
+  await page.getByText('Controlla', { exact: true }).click();
+  await page.getByText('Nuova versione pronta').waitFor();
+  await page.getByText('Vuoi aggiornare adesso?', { exact: false }).waitFor();
+  await shot(page, '5-update-dialog');
+  // "Più tardi" keeps working and leaves a restart button next to the check.
+  await page.getByText('Più tardi', { exact: true }).click();
+  await page.getByText('Riavvia e aggiorna', { exact: true }).waitFor();
+  assert.deepEqual(await calls(page, 'otaApply'), [], 'nothing restarts until the user says so');
+  // "Sì": the main process is asked to restart.
+  await page.getByText('Controlla', { exact: true }).click();
+  await page.getByText('Nuova versione pronta').waitFor();
+  await page.getByText('Riavvia e aggiorna', { exact: true }).last().click();
+  await page.waitForFunction(() => window.__calls.some((c) => c.name === 'otaApply'));
+  assert.deepEqual(await calls(page, 'otaApply'), [[]]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('checking for updates: already up to date says so', async () => {
+  const { page, errors } = await open({ ota: { info: OTA_INFO, result: 'current' } });
+  await page.getByText('Impostazioni', { exact: true }).first().click();
+  await page.getByText('Generale', { exact: true }).first().click();
+  await page.getByText('Controlla', { exact: true }).click();
+  await page.getByText("Sei già all'ultima versione").waitFor();
+  assert.equal(await page.getByText('Nuova versione pronta').count(), 0);
   assert.deepEqual(errors, []);
   await page.close();
 });

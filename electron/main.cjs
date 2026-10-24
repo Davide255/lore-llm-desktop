@@ -1547,6 +1547,22 @@ handle('ota:ready', () => {
 });
 handle('ota:status', () => ota?.info() ?? { enabled: false, phase: 'idle', appVersion: app.getVersion(), channel: 'production', version: null });
 handle('ota:check', () => ota?.check({ force: true }));
+// Restart into the downloaded bundle. The session lives encrypted in userData (never in the renderer),
+// so a restart keeps the login; it is written out first, and if it cannot be kept we do not restart.
+handle('ota:apply', async () => {
+  if (!ota?.pendingVersion()) return false;
+  try {
+    await auth.flush();
+  } catch (err) {
+    console.warn('[ota] not restarting, the login would be lost:', err?.message ?? err);
+    return false;
+  }
+  // A Windows login item passes --hidden: an update the user just asked for must show the window.
+  app.relaunch({ args: process.argv.slice(1).filter((a) => a !== '--hidden') });
+  allowClose = true;
+  app.quit(); // before-quit pushes what the vault still has pending
+  return true;
+});
 handle('app:confirmClose', () => {
   allowClose = true;
   win?.close();

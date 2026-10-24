@@ -1,5 +1,5 @@
 {
   "baseUrl": "https://www.athly.it/ota/lore/desktop",
-  "runtimeVersion": "2",
+  "runtimeVersion": "3",
   "channels": ["beta", "production"]
 }

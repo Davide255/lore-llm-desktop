@@ -189,3 +189,36 @@ test('http base URLs are refused', async () => {
   assert.equal(await ota.check({ force: true }), 'error');
   assert.equal(srv.hits.length, 0);
 });
+
+test('a downloaded update stays "ready" (with its version) until the app restarts into it', async () => {
+  const dir = tmp();
+  const srv = server();
+  const seen = [];
+  const ota = make(dir, srv, { onStatus: (s) => seen.push(s) });
+  ota.init();
+  assert.equal(ota.pendingVersion(), null);
+  assert.equal(await ota.check({ force: true }), 'ready');
+  assert.deepEqual(seen.map((s) => [s.phase, s.next]), [['checking', undefined], ['downloading', srv.manifest.version], ['ready', srv.manifest.version]]);
+  assert.equal(ota.pendingVersion(), srv.manifest.version);
+  assert.equal(ota.info().pending, srv.manifest.version);
+
+  // Asking again (the user pressing "Controlla" once more) must not say "up to date".
+  assert.equal(await ota.check({ force: true }), 'ready');
+  assert.equal(seen.at(-1).next, srv.manifest.version);
+
+  // The restart: the new launch starts from it and nothing is pending any more.
+  const next = make(dir, srv);
+  assert.ok(next.init());
+  assert.equal(next.pendingVersion(), null);
+  assert.equal(await next.check({ force: true }), 'current');
+});
+
+test('a downloaded bundle that was damaged on disk is not offered for a restart', async () => {
+  const dir = tmp();
+  const srv = server();
+  const ota = make(dir, srv);
+  ota.init();
+  await ota.check({ force: true });
+  fs.rmSync(path.join(dir, 'bundles', srv.manifest.version, 'assets', 'app.js'));
+  assert.equal(ota.pendingVersion(), null);
+});

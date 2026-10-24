@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('lore', {
   otaReady: call('ota:ready'),
   otaStatus: call('ota:status'),
   otaCheck: call('ota:check'),
+  otaApply: call('ota:apply'),
   authUser: call('auth:user'),
   signIn: call('auth:signIn'),
   cancelSignIn: call('auth:cancelSignIn'),

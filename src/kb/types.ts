@@ -272,6 +272,10 @@ export interface OtaInfo {
   channel: string;
   /** Version of the running downloaded bundle; null when the app runs its own. */
   version: string | null;
+  /** Downloaded, waiting for a restart. */
+  pending?: string | null;
+  /** The version being downloaded or just downloaded (set with the downloading and ready phases). */
+  next?: string;
 }
 
 /** Desktop system settings: open at login and the background runner (electron/background.cjs). */
@@ -405,6 +409,8 @@ export interface LoreBridge {
   otaStatus(): Promise<OtaInfo>;
   /** Looks for a live update now (ignores the 15-minute throttle). */
   otaCheck(): Promise<OtaPhase>;
+  /** Restarts the app into the downloaded update; the login is kept. False when it did not restart. */
+  otaApply(): Promise<boolean>;
   authUser(): Promise<AuthUser | null>;
   signIn(provider?: SignInProvider): Promise<AuthUser | null>;
   cancelSignIn(): Promise<void>;
