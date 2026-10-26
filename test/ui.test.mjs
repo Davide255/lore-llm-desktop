@@ -93,8 +93,6 @@ function fakeBridge({ signedIn, vault = false, ota = null }) {
     vault: {
       state: vault ? 'idle' : 'off',
       enabled: vault,
-      root: vault ? '/Users/me/Documents/Lore LLM' : null,
-      defaultRoot: '/Users/me/Documents/Lore LLM',
       linkFormat: 'markdown',
       pending: 0,
       lastSyncAt: vault ? now - 30_000 : null,
@@ -104,10 +102,11 @@ function fakeBridge({ signedIn, vault = false, ota = null }) {
       confirm: null,
     },
     obsidian: { installed: true, registered: vault },
+    // One folder per project: only Athly has one when the vault is on.
     vaultProjects: [
-      { key: 'Athly', name: 'Athly', team: null, access: 'owner', selected: true, folder: 'Athly' },
-      { key: 'Archivio', name: 'Archivio', team: null, access: 'owner', selected: true, folder: 'Archivio' },
-      { key: 'Athly@T1', name: 'Athly', team: { id: 'T1', name: 'Squadra' }, access: 'viewer', selected: false, folder: 'Athly (Squadra)' },
+      { key: 'Athly', name: 'Athly', team: null, access: 'owner', root: vault ? '/Users/me/Notes/Athly' : null, registered: vault, suggested: '/Users/me/Documents/Lore LLM/Athly' },
+      { key: 'Archivio', name: 'Archivio', team: null, access: 'owner', root: null, registered: false, suggested: '/Users/me/Documents/Lore LLM/Archivio' },
+      { key: 'Athly@T1', name: 'Athly', team: { id: 'T1', name: 'Squadra' }, access: 'viewer', root: null, registered: false, suggested: '/Users/me/Documents/Lore LLM/Athly (Squadra)' },
     ],
   };
   window.__calls = [];
@@ -185,22 +184,18 @@ function fakeBridge({ signedIn, vault = false, ota = null }) {
     links: rec('links', async () => state.links),
     vaultStatus: rec('vaultStatus', async () => state.vault),
     vaultChooseRoot: rec('vaultChooseRoot', async () => null),
-    vaultPreview: rec('vaultPreview', async (root) => ({ ok: true, root: root ?? state.vault.defaultRoot, exists: false, empty: true, download: 3 })),
-    vaultEnable: rec('vaultEnable', async ({ root }) => {
-      state.vault = { ...state.vault, enabled: true, state: 'idle', root: root ?? state.vault.defaultRoot };
-      return state.vault;
-    }),
-    vaultDisable: rec('vaultDisable', async () => (state.vault = { ...state.vault, enabled: false, state: 'off' })),
+    vaultPreview: rec('vaultPreview', async (key, root) => ({ ok: true, root, exists: false, empty: true, download: 3 })),
     vaultSyncNow: rec('vaultSyncNow', async () => state.vault),
     vaultConfirm: rec('vaultConfirm', async () => state.vault),
     vaultReveal: rec('vaultReveal', async () => true),
     vaultSetLinkFormat: rec('vaultSetLinkFormat', async (f) => (state.vault = { ...state.vault, linkFormat: f })),
     vaultProjects: rec('vaultProjects', async () => state.vaultProjects),
-    vaultSetProject: rec('vaultSetProject', async (key, on) => {
-      state.vaultProjects = state.vaultProjects.map((p) => (p.key === key ? { ...p, selected: on } : p));
-      return true;
+    vaultSetProject: rec('vaultSetProject', async (key, root) => {
+      state.vaultProjects = state.vaultProjects.map((p) => (p.key === key ? { ...p, root, registered: false } : p));
+      const on = state.vaultProjects.some((p) => p.root);
+      return (state.vault = { ...state.vault, enabled: on, state: on ? 'idle' : 'off' });
     }),
-    obsidianStatus: rec('obsidianStatus', async () => state.obsidian),
+    obsidianStatus: rec('obsidianStatus', async (key) => (key ? { ...state.obsidian, registered: !!state.vaultProjects.find((p) => p.key === key)?.registered } : state.obsidian)),
     openInObsidian: rec('openInObsidian', async () => true),
     launchObsidian: rec('launchObsidian', async () => {}),
     openAttachment: rec('openAttachment', async () => ''),
@@ -548,18 +543,18 @@ test('"Sposta in un team…" moves one of your projects into a team you can writ
   await page.close();
 });
 
-test('obsidian: setup from settings enables the local vault', async () => {
+test('obsidian: setup from settings gives one project its own folder', async () => {
   const { page, errors } = await open();
   await page.getByText('Usi Obsidian?').waitFor();
   await page.getByText('Impostazioni', { exact: true }).first().click();
   await page.getByText('Obsidian', { exact: true }).first().click();
-  await page.getByText('Copia locale della knowledge base').waitFor();
-  await page.getByRole('switch').first().click();
-  await page.getByText('Copia locale per Obsidian').waitFor();
+  await page.getByText('Cartelle dei progetti', { exact: true }).waitFor();
+  await page.getByText('Scegli cartella…').first().click();
+  await page.getByText('Cartella Obsidian di «Athly»').waitFor();
   await page.getByText('Verrà creata: 3 file da scaricare.').waitFor();
   await shot(page, '8-vault-setup');
   await page.getByText('Attiva', { exact: true }).click();
-  assert.deepEqual(await calls(page, 'vaultEnable'), [[{ root: '/Users/me/Documents/Lore LLM', linkFormat: 'markdown' }]]);
+  assert.deepEqual(await calls(page, 'vaultSetProject'), [['Athly', '/Users/me/Documents/Lore LLM/Athly']]);
   // Next step explains the one manual step in Obsidian.
   await page.getByText('Scegli «Apri cartella come vault» (Open folder as vault)').waitFor();
   await shot(page, '9-vault-register');
@@ -573,13 +568,17 @@ test('obsidian: status, "Apri in Obsidian" and the default editor', async () => 
   await page.getByText('Obsidian', { exact: true }).first().click();
   await page.getByText('Sincronizzata', { exact: true }).waitFor();
   await page.getByText('Non sincronizzati (1)').waitFor();
-  // Per-project selection: the team project is off until switched on.
-  await page.getByText('Progetti nella copia locale').waitFor();
+  // One folder per project: Athly has its own, the team project gets one of its own when switched on.
+  await page.getByText('Cartelle dei progetti', { exact: true }).waitFor();
+  await page.getByText('/Users/me/Notes/Athly', { exact: true }).waitFor();
   const switches = page.getByRole('switch');
   const n = await switches.count();
   await switches.nth(n - 1).click();
-  assert.deepEqual(await calls(page, 'vaultSetProject'), [['Athly@T1', true]]);
-  await page.getByText('Athly (Squadra)/ · sola lettura').waitFor();
+  await page.getByText('Cartella Obsidian di «Athly»').waitFor();
+  await page.getByText('Attiva', { exact: true }).click();
+  assert.deepEqual(await calls(page, 'vaultSetProject'), [['Athly@T1', '/Users/me/Documents/Lore LLM/Athly (Squadra)']]);
+  await page.getByText('Più tardi', { exact: true }).click();
+  await page.getByText('/Users/me/Documents/Lore LLM/Athly (Squadra)', { exact: true }).waitFor();
   await shot(page, '10-vault-status');
   // Default editor → Obsidian: "Modifica" hands the note over.
   await page.getByText('Obsidian', { exact: true }).last().click();
@@ -589,6 +588,19 @@ test('obsidian: status, "Apri in Obsidian" and the default editor', async () => 
   await page.getByLabel('Apri in Obsidian').click();
   await page.getByText('Modifica in Obsidian').click();
   assert.deepEqual(await calls(page, 'openInObsidian'), [['Athly/Test.md'], ['Athly/Test.md']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('obsidian: switching a project off stops its sync and leaves the folder', async () => {
+  const { page, errors } = await open({ vault: true });
+  await page.getByText('Impostazioni', { exact: true }).first().click();
+  await page.getByText('Obsidian', { exact: true }).first().click();
+  await page.getByText('/Users/me/Notes/Athly', { exact: true }).waitFor();
+  await page.getByRole('switch').first().click();
+  assert.deepEqual(await calls(page, 'vaultSetProject'), [['Athly', null]]);
+  await page.getByText('Scegli cartella…').first().waitFor();
+  assert.equal(await page.getByText('/Users/me/Notes/Athly', { exact: true }).count(), 0);
   assert.deepEqual(errors, []);
   await page.close();
 });

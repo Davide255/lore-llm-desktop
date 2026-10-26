@@ -3,25 +3,35 @@ import { Text, View } from 'react-native';
 import { c, font, radius, t } from '../theme';
 import { useApp } from '../state/app';
 import { lore } from '../kb/bridge';
-import type { LinkFormat, VaultPreview } from '../kb/types';
+import type { VaultPreview, VaultProject } from '../kb/types';
 import { plural } from '../kb/paths';
-import { Btn, FieldLabel, Hover, Icon, IconWell, InfoStrip, Segmented, Toggle } from '../ui/primitives';
+import { Btn, FieldLabel, Icon, IconWell, InfoStrip } from '../ui/primitives';
 import { DialogFooter, DialogFrame, DialogTitle } from '../ui/overlays';
 
 // ---------------------------------------------------------------------------
-// Setup: choose the folder, first sync, then open it in Obsidian.
+// Setup of one project: choose its folder, first sync, then open it in Obsidian.
 // ---------------------------------------------------------------------------
-export function VaultSetupDialog({ onClose }: { onClose: () => void }) {
-  const app = useApp();
-  const enabled = !!app.vault?.enabled;
-  const [step, setStep] = useState<'folder' | 'obsidian'>(enabled ? 'obsidian' : 'folder');
-  return step === 'folder' ? <FolderStep onClose={onClose} onDone={() => setStep('obsidian')} /> : <ObsidianStep onClose={onClose} />;
+export function VaultSetupDialog({ projectKey, pickFolder, onClose }: { projectKey: string; pickFolder?: boolean; onClose: () => void }) {
+  const [project, setProject] = useState<VaultProject | null>(null);
+  const [step, setStep] = useState<'folder' | 'obsidian' | null>(null);
+  const load = React.useCallback(() => lore.vaultProjects().then((l) => setProject(l.find((p) => p.key === projectKey) ?? null)), [projectKey]);
+  useEffect(() => {
+    load();
+  }, [load]);
+  useEffect(() => {
+    if (project && step === null) setStep(project.root && !pickFolder ? 'obsidian' : 'folder');
+  }, [project, step, pickFolder]);
+  if (!project || !step) return null;
+  return step === 'folder' ? (
+    <FolderStep project={project} onClose={onClose} onDone={() => load().then(() => setStep('obsidian'))} />
+  ) : (
+    <ObsidianStep project={project} reload={load} onClose={onClose} />
+  );
 }
 
-function FolderStep({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+function FolderStep({ project, onClose, onDone }: { project: VaultProject; onClose: () => void; onDone: () => void }) {
   const app = useApp();
-  const [root, setRoot] = useState(app.vault?.root ?? app.vault?.defaultRoot ?? '');
-  const [linkFormat, setLinkFormat] = useState<LinkFormat>(app.vault?.linkFormat ?? 'markdown');
+  const [root, setRoot] = useState(project.root ?? project.suggested ?? '');
   const [preview, setPreview] = useState<VaultPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,22 +39,23 @@ function FolderStep({ onClose, onDone }: { onClose: () => void; onDone: () => vo
   useEffect(() => {
     let live = true;
     setPreview(null);
+    if (!root) return;
     lore
-      .vaultPreview(root || undefined)
+      .vaultPreview(project.key, root)
       .then((p) => live && setPreview(p))
       .catch((e) => live && setError(String(e?.message ?? e)));
     return () => {
       live = false;
     };
-  }, [root]);
+  }, [root, project.key]);
 
   const enable = async () => {
     setBusy(true);
     setError(null);
     try {
-      await lore.vaultEnable({ root: root || undefined, linkFormat });
+      await lore.vaultSetProject(project.key, root);
       await app.refreshVault();
-      app.toast({ icon: 'cloud_done', text: 'Copia locale attiva' });
+      app.toast({ icon: 'cloud_done', text: `«${project.name}» sincronizza con la sua cartella` });
       onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e));
@@ -55,10 +66,10 @@ function FolderStep({ onClose, onDone }: { onClose: () => void; onDone: () => vo
 
   return (
     <DialogFrame width={560} onDismiss={onClose} onSubmit={preview?.ok && !busy ? enable : undefined}>
-      <DialogTitle onClose={onClose}>Copia locale per Obsidian</DialogTitle>
+      <DialogTitle onClose={onClose}>{`Cartella Obsidian di «${project.name}»`}</DialogTitle>
       <View style={{ paddingHorizontal: 24, paddingTop: 8, paddingBottom: 20, gap: 16 }}>
         <Text style={t(400, 13.5, 1.55, { color: c.ink2 })}>
-          Lore crea una cartella con un file .md per ogni nota e la tiene sincronizzata con il cloud. Aprila in Obsidian come vault: quello che salvi lì arriva agli agenti, e le loro modifiche arrivano a te.
+          Lore tiene questa cartella sincronizzata con il progetto: un file .md per ogni nota, direttamente dentro. Aprila in Obsidian come vault: quello che salvi lì arriva agli agenti, e le loro modifiche arrivano a te.
         </Text>
         <View style={{ gap: 6 }}>
           <FieldLabel>Cartella</FieldLabel>
@@ -77,22 +88,7 @@ function FolderStep({ onClose, onDone }: { onClose: () => void; onDone: () => vo
               }}
             />
           </View>
-          <PreviewLine preview={preview} />
-        </View>
-        <View style={{ gap: 6 }}>
-          <FieldLabel>Link nelle nuove note</FieldLabel>
-          <Segmented
-            width={300}
-            value={linkFormat}
-            onChange={setLinkFormat}
-            options={[
-              { value: 'markdown', label: 'Markdown [x](x.md)' },
-              { value: 'wikilink', label: '[[Wikilink]]' },
-            ]}
-          />
-          <Text style={t(400, 12, 1.45, { color: c.ink3 })}>
-            I link Markdown funzionano ovunque (agenti, app mobile). Lore mostra comunque anche i [[wikilink]]. Vale solo per una cartella mai aperta in Obsidian.
-          </Text>
+          <PreviewLine preview={root ? preview : null} empty={!root} />
         </View>
         {error ? (
           <InfoStrip icon="error" style={{ paddingVertical: 10, paddingHorizontal: 14 }}>
@@ -102,13 +98,14 @@ function FolderStep({ onClose, onDone }: { onClose: () => void; onDone: () => vo
       </View>
       <DialogFooter>
         <Btn label="Annulla" onPress={onClose} />
-        <Btn variant="primary" label={busy ? 'Sincronizzazione…' : 'Attiva'} disabled={!preview?.ok || busy} onPress={enable} />
+        <Btn variant="primary" label={busy ? 'Sincronizzazione…' : project.root ? 'Cambia' : 'Attiva'} disabled={!preview?.ok || busy} onPress={enable} />
       </DialogFooter>
     </DialogFrame>
   );
 }
 
-function PreviewLine({ preview }: { preview: VaultPreview | null }) {
+function PreviewLine({ preview, empty = false }: { preview: VaultPreview | null; empty?: boolean }) {
+  if (empty) return <Text style={t(400, 12, 1.45, { color: c.ink3 })}>Scegli una cartella per continuare.</Text>;
   if (!preview) return <Text style={t(400, 12, 1.45, { color: c.ink3 })}>Controllo della cartella…</Text>;
   if (!preview.ok) return <Text style={t(400, 12, 1.45, { color: c.danger })}>{preview.error}</Text>;
   let text: string;
@@ -127,18 +124,18 @@ function PreviewLine({ preview }: { preview: VaultPreview | null }) {
   return <Text style={t(400, 12, 1.45, { color: preview.empty || preview.resume ? c.ink3 : c.warning })}>{text}</Text>;
 }
 
-function ObsidianStep({ onClose }: { onClose: () => void }) {
+function ObsidianStep({ project, reload, onClose }: { project: VaultProject; reload: () => Promise<unknown>; onClose: () => void }) {
   const app = useApp();
-  const root = app.vault?.root ?? '';
-  const { installed, registered } = app.obsidian;
-  const { refreshVault } = app;
+  const root = project.root ?? '';
+  const registered = project.registered;
+  const { installed } = app.obsidian;
 
   // Obsidian has no link that adds a vault: wait for the user to open the folder there.
   useEffect(() => {
     if (registered) return;
-    const id = setInterval(() => refreshVault().catch(() => {}), 2000);
+    const id = setInterval(() => reload().catch(() => {}), 2000);
     return () => clearInterval(id);
-  }, [registered, refreshVault]);
+  }, [registered, reload]);
 
   return (
     <DialogFrame width={560} onDismiss={onClose}>
@@ -146,14 +143,14 @@ function ObsidianStep({ onClose }: { onClose: () => void }) {
       <View style={{ paddingHorizontal: 24, paddingTop: 8, paddingBottom: 20, gap: 14 }}>
         {!installed ? (
           <>
-            <Text style={t(400, 13.5, 1.55, { color: c.ink2 })}>Obsidian non risulta installato. Scaricalo, poi torna qui: la copia locale è già pronta.</Text>
+            <Text style={t(400, 13.5, 1.55, { color: c.ink2 })}>Obsidian non risulta installato. Scaricalo, poi torna qui: la cartella del progetto è già pronta.</Text>
             <Btn icon="download" label="Scarica Obsidian" onPress={() => window.open('https://obsidian.md/download', '_blank')} style={{ alignSelf: 'flex-start' }} />
           </>
         ) : registered ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
             <IconWell icon="check" tint="purple" />
             <Text style={[t(400, 13.5, 1.55, { color: c.ink2 }), { flex: 1 }]}>
-              La cartella è aperta come vault in Obsidian. Da ora «Apri in Obsidian» porta direttamente alla nota.
+              La cartella è aperta come vault in Obsidian. Da ora «Apri in Obsidian» porta direttamente alla nota di questo progetto.
             </Text>
           </View>
         ) : (
@@ -186,7 +183,7 @@ function ObsidianStep({ onClose }: { onClose: () => void }) {
             onPress={() => {
               onClose();
               const r = app.route;
-              app.openInObsidian(r.name === 'file' ? r.path : undefined);
+              app.openInObsidian(r.name === 'file' && r.path.startsWith(`${project.key}/`) ? r.path : project.key);
             }}
           />
         ) : null}
@@ -240,37 +237,6 @@ export function VaultConfirmDialog({ count, paths, onClose }: { count: number; p
         <Btn variant="danger" label="Elimina anche dal cloud" onPress={() => answer('delete')} />
         <View style={{ flex: 1 }} />
         <Btn variant="primary" label="Ripristina dal cloud" onPress={() => answer('restore')} />
-      </DialogFooter>
-    </DialogFrame>
-  );
-}
-
-// ---------------------------------------------------------------------------
-export function VaultDisableDialog({ onClose }: { onClose: () => void }) {
-  const app = useApp();
-  const [deleteLocal, setDeleteLocal] = useState(false);
-  const submit = async () => {
-    onClose();
-    await lore.vaultDisable({ deleteLocal });
-    await app.refreshVault();
-    if (app.prefs.defaultEditor === 'obsidian') app.setPrefs({ defaultEditor: 'lore' });
-    app.toast({ icon: 'cloud_off', text: deleteLocal ? 'Copia locale disattivata e spostata nel cestino' : 'Copia locale disattivata' });
-  };
-  return (
-    <DialogFrame width={480} onDismiss={onClose} onSubmit={submit}>
-      <DialogTitle onClose={onClose}>Disattivare la copia locale?</DialogTitle>
-      <View style={{ paddingHorizontal: 24, paddingTop: 8, paddingBottom: 20, gap: 14 }}>
-        <Text style={t(400, 13.5, 1.55, { color: c.ink2 })}>
-          Le modifiche in sospeso vengono caricate prima di fermarsi. Da quel momento quello che cambi nella cartella non arriva più al cloud.
-        </Text>
-        <Hover onPress={() => setDeleteLocal(!deleteLocal)} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-          <Toggle value={deleteLocal} onChange={setDeleteLocal} />
-          <Text style={t(400, 13.5, 1.4, { color: c.ink })}>Sposta anche la cartella nel cestino</Text>
-        </Hover>
-      </View>
-      <DialogFooter>
-        <Btn label="Annulla" onPress={onClose} />
-        <Btn variant="danger" label="Disattiva" onPress={submit} />
       </DialogFooter>
     </DialogFrame>
   );

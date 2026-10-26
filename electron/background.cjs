@@ -44,4 +44,18 @@ function closeAction({ allowClose, active, quitting, visible }) {
   return allowClose ? 'hide' : 'ask';
 }
 
-module.exports = { supported, DEFAULTS, normalize, isActive, startsHidden, loginItemSettings, closeAction };
+/**
+ * The tray / menu-bar icon is always there on Windows and macOS, so the app stays reachable;
+ * what it says and offers depends on whether the runner keeps the vault syncing.
+ */
+function trayState({ platform, active }) {
+  return {
+    show: supported(platform),
+    syncItem: !!active,
+    tooltip: active
+      ? 'Lore LLM Desktop: la sincronizzazione con Obsidian resta attiva'
+      : 'Lore LLM Desktop',
+  };
+}
+
+module.exports = { supported, DEFAULTS, normalize, isActive, startsHidden, loginItemSettings, closeAction, trayState };

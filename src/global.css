@@ -10,7 +10,7 @@ body,
 }
 body {
   -webkit-font-smoothing: antialiased;
-  font-family: -apple-system, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Inter Variable', Inter, -apple-system, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
 }
 #root {
   display: flex;

@@ -534,3 +534,47 @@ test('read-only projects: files are read-only, local edits are reverted, new fil
   assert.equal(disk('V (Squadra)/a.md'), 'a\n');
   assert.ok(mirror.store.has('V@T1/a.md'));
 });
+
+test('flat vault: the folder is the project, files sit at its root, other projects stay out', async (t) => {
+  const layout = { flat: 'P', folderOf: (k) => k, keyOf: (f) => f, covers: (k) => k === layout.flat, readonly: () => false, folders: () => new Map() };
+  const { root, engine, mirror, write, pass, disk, trashed } = await setup(t, { 'P/a.md': 'a\n', 'P/sub/b.md': 'b\n', 'P/index.md': '# P\n', 'Q/c.md': 'c\n' }, { layout });
+  await engine.start();
+  assert.equal(disk('a.md'), 'a\n');
+  assert.equal(disk('sub/b.md'), 'b\n');
+  assert.ok(!fs.existsSync(path.join(root, 'P')), 'no project folder inside the vault');
+  assert.ok(!fs.existsSync(path.join(root, 'Q')) && !fs.existsSync(path.join(root, 'c.md')), 'other projects are not downloaded');
+  assert.equal(fs.statSync(path.join(root, 'index.md')).mode & 0o222, 0);
+  assert.deepEqual(mirror.calls, []);
+
+  // Files at the vault root are the project's files, not "outside a project".
+  await write('a.md', 'a\nmore\n');
+  await write('new.md', 'n\n');
+  await write('sub/deep/c.md', 'd\n');
+  await pass();
+  assert.equal(mirror.store.get('P/a.md').data.toString(), 'a\nmore\n');
+  assert.equal(mirror.store.get('P/new.md').data.toString(), 'n\n');
+  assert.equal(mirror.store.get('P/sub/deep/c.md').data.toString(), 'd\n');
+  assert.ok(!engine.status().unsynced.length);
+
+  // Cloud edits and deletes land in the same place.
+  mirror.remoteWrite('P/sub/b.md', 'b2\n');
+  await mirror.remove('P/new.md');
+  await pass();
+  assert.equal(disk('sub/b.md'), 'b2\n');
+  assert.ok(!fs.existsSync(path.join(root, 'new.md')));
+  assert.deepEqual(trashed, ['new.md']);
+
+  // A paths helper: abs() of the project is the vault folder itself.
+  assert.equal(engine.abs('P'), root);
+  assert.equal(engine.abs('P/sub/b.md'), path.join(root, 'sub', 'b.md'));
+
+  // The project renamed or moved to a team: same folder, new key, nothing re-uploaded.
+  await mirror.move('P', 'R');
+  mirror.calls.length = 0;
+  await engine.rekeyProject('P', 'R');
+  await pass();
+  assert.equal(disk('sub/b.md'), 'b2\n');
+  assert.deepEqual(mirror.calls, []);
+  assert.ok(Object.keys(engine.manifest.files).every((k) => k.startsWith('R/')));
+  assert.equal(engine.abs('R/x.md'), path.join(root, 'x.md'));
+});

@@ -197,10 +197,8 @@ export type LinkFormat = 'markdown' | 'wikilink';
 /** The local vault: a folder kept in sync with the cloud, edited with Obsidian. */
 export interface VaultStatus {
   state: 'off' | 'idle' | 'syncing' | 'offline' | 'paused:auth' | 'paused:confirm' | 'error';
+  /** At least one project has an Obsidian folder. */
   enabled: boolean;
-  root: string | null;
-  /** Null in the Mac App Store build: the folder must be picked. */
-  defaultRoot: string | null;
   linkFormat: LinkFormat;
   pending: number;
   lastSyncAt: number | null;
@@ -210,15 +208,18 @@ export interface VaultStatus {
   confirm: { count: number; paths: string[] } | null;
 }
 
-/** A project in the local copy's selection. Team projects sit in `Name (Team)` folders. */
+/** A project and its Obsidian folder: the folder is the project's own vault, its notes sit directly inside. */
 export interface VaultProject {
   key: string;
   name: string;
   team: { id: string; name: string } | null;
   access: TeamRole;
-  selected: boolean;
-  /** Its folder in the local copy. */
-  folder: string;
+  /** The folder the project syncs with; null while it has none. */
+  root: string | null;
+  /** Obsidian has that folder open as a vault. */
+  registered: boolean;
+  /** Where Lore would put it by default (null in the Mac App Store build: the folder must be picked). */
+  suggested: string | null;
 }
 
 export interface VaultPreview {
@@ -372,20 +373,22 @@ export interface LoreBridge {
   moveToTeam(key: string, teamId: string): Promise<string>;
   vaultStatus(): Promise<VaultStatus>;
   vaultChooseRoot(): Promise<string | null>;
-  vaultPreview(root?: string): Promise<VaultPreview>;
-  vaultEnable(opts: { root?: string; linkFormat?: LinkFormat }): Promise<VaultStatus>;
-  vaultDisable(opts?: { deleteLocal?: boolean }): Promise<VaultStatus>;
+  /** What would happen if `root` became the project's Obsidian folder. */
+  vaultPreview(key: string, root: string): Promise<VaultPreview>;
   vaultSyncNow(): Promise<VaultStatus>;
   vaultConfirm(answer: 'delete' | 'restore'): Promise<VaultStatus>;
-  /** Shows a file (or the vault folder) in Finder/Explorer. */
-  vaultReveal(path?: string): Promise<boolean>;
+  /** Shows a file (or the project's folder, for a project key) in Finder/Explorer. */
+  vaultReveal(path: string): Promise<boolean>;
   vaultSetLinkFormat(format: LinkFormat): Promise<VaultStatus>;
   /** The projects the local copy can hold, and whether each one syncs. */
   vaultProjects(): Promise<VaultProject[]>;
-  vaultSetProject(key: string, on: boolean): Promise<boolean>;
-  obsidianStatus(): Promise<ObsidianStatus>;
+  /** A folder gives the project an Obsidian vault (or moves it); null stops syncing it and leaves the folder. */
+  vaultSetProject(key: string, root: string | null): Promise<VaultStatus>;
+  /** With a project key: that project's folder; without: all of them. */
+  obsidianStatus(key?: string): Promise<ObsidianStatus>;
   /** Opens a note (or the vault) in Obsidian. */
-  openInObsidian(path?: string): Promise<boolean>;
+  /** Opens a note, or a project's vault for a project key. */
+  openInObsidian(path: string): Promise<boolean>;
   launchObsidian(): Promise<void>;
   /** Puts files from the user's disk into `dir`: the ones given, or picked with the system dialog when none. */
   upload(dir: string, files?: UploadFile[], opts?: { folder?: boolean }): Promise<UploadResult>;

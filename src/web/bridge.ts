@@ -61,8 +61,6 @@ function channel<T>() {
 const VAULT_OFF: VaultStatus = {
   state: 'off',
   enabled: false,
-  root: null,
-  defaultRoot: null,
   linkFormat: 'markdown',
   pending: 0,
   lastSyncAt: null,
@@ -626,8 +624,6 @@ export function createWebBridge(): LoreBridge {
     vaultStatus: async () => VAULT_OFF,
     vaultChooseRoot: async () => null,
     vaultPreview: noVault,
-    vaultEnable: noVault,
-    vaultDisable: async () => VAULT_OFF,
     vaultSyncNow: async () => VAULT_OFF,
     vaultConfirm: async () => VAULT_OFF,
     vaultReveal: async () => false,

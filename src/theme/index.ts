@@ -70,7 +70,7 @@ export const c = {
 } as const;
 
 export const font = {
-  sf: '-apple-system, "SF Pro Text", "SF Pro Display", "Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", system-ui, sans-serif',
+  sf: '"Inter Variable", Inter, -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif',
   mono: 'ui-monospace, "SF Mono", "Cascadia Code", Consolas, Menlo, monospace',
   icon: '"Material Symbols Rounded"',
 };

@@ -20,9 +20,8 @@ export type Dialog =
   | { kind: 'move'; path: string }
   | { kind: 'delete'; path: string }
   | { kind: 'unsaved'; next: () => void }
-  | { kind: 'vaultSetup' }
+  | { kind: 'vaultSetup'; key: string; /** Pick the folder again, though the project has one. */ folder?: boolean }
   | { kind: 'vaultConfirm'; count: number; paths: string[] }
-  | { kind: 'vaultDisable' }
   | { kind: 'moveToTeam'; path: string }
   | { kind: 'otaUpdate'; version: string };
 
@@ -110,7 +109,7 @@ interface AppCtx {
   refreshVault: () => Promise<void>;
   /** The vault is on and Obsidian can open its notes. */
   obsidianReady: boolean;
-  openInObsidian: (path?: string) => Promise<void>;
+  openInObsidian: (path: string) => Promise<void>;
   /** "Modifica": the Lore editor, or Obsidian when it's the default editor. */
   editFile: (path: string) => void;
   /** Who made the latest external change (agent, Obsidian, another device). */
@@ -445,24 +444,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const obsidianReady = !isWeb && !!vault?.enabled && vault.state !== 'off' && obsidian.installed;
 
   const openInObsidian = useCallback(
-    async (path?: string) => {
+    async (path: string) => {
       if (isWeb) return;
+      const key = path.split('/')[0];
       try {
-        if (!obsidian.registered) {
-          // Obsidian has no link that adds a vault: the setup explains the one manual step.
+        // A project without a folder, or one Obsidian doesn't know yet: the setup explains the steps
+        // (Obsidian has no link that adds a vault).
+        const o = await lore.obsidianStatus(key);
+        if (!o.registered) {
           await refreshVault();
-          const o = await lore.obsidianStatus();
-          if (!o.registered) {
-            openDialog({ kind: 'vaultSetup' });
-            return;
-          }
+          openDialog({ kind: 'vaultSetup', key });
+          return;
         }
         await lore.openInObsidian(path);
       } catch (e) {
         fail(e);
       }
     },
-    [obsidian.registered, refreshVault, fail],
+    [refreshVault, fail],
   );
 
   const editFile = useCallback(
