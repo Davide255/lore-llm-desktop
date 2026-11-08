@@ -1,6 +1,8 @@
 import React, { memo, useEffect, useMemo, useState } from 'react';
 import { Text, View, type TextStyle } from 'react-native';
 import { Lexer, Marked, type Token, type Tokens } from 'marked';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 import { c, font, radius, t, web } from '../theme';
 import { assetUrl, isImage, parseWikiLink, wikiLabel } from '../kb/links';
 import { lore } from '../kb/bridge';
@@ -14,9 +16,32 @@ interface WikiToken {
   inner: string;
 }
 
+/** `$inline$` and `$$display$$` TeX. */
+interface MathToken {
+  type: 'math';
+  raw: string;
+  text: string;
+  display: boolean;
+}
+
 // One lexer configuration for blocks and inline snippets alike.
 const LEX = new Marked({ gfm: true }).use({
   extensions: [
+    {
+      name: 'math',
+      level: 'inline',
+      start(src: string) {
+        const i = src.indexOf('$');
+        return i === -1 ? undefined : i;
+      },
+      tokenizer(src: string) {
+        const d = /^\$\$([\s\S]+?)\$\$/.exec(src);
+        if (d && d[1].trim()) return { type: 'math', raw: d[0], text: d[1].trim(), display: true } as MathToken;
+        // Single dollars: no space just inside them, and not "$5 and $10".
+        const m = /^\$(?![\s$])((?:\\.|[^$\\\n])+?)(?<![\s\\])\$(?!\d)/.exec(src);
+        return m ? ({ type: 'math', raw: m[0], text: m[1], display: false } as MathToken) : undefined;
+      },
+    },
     {
       name: 'wikilink',
       level: 'inline',
@@ -68,6 +93,36 @@ export function extractHeadings(src: string): Heading[] {
   return lexBlocks(src)
     .filter((b) => b.token.type === 'heading')
     .map((b) => ({ depth: (b.token as Tokens.Heading).depth, text: plain((b.token as Tokens.Heading).tokens), line: b.line }));
+}
+
+const isDisplayMath = (x: Token) => x.type === 'math' && (x as unknown as MathToken).display;
+
+/** Drops the line breaks (and blank text) that sat next to a display formula. */
+function trimBreaks(run: Token[]): Token[] {
+  const blank = (x: Token) => x.type === 'br' || (x.type === 'text' && !String((x as Tokens.Text).raw).trim());
+  let a = 0;
+  let b = run.length;
+  while (a < b && blank(run[a])) a++;
+  while (b > a && blank(run[b - 1])) b--;
+  return run.slice(a, b);
+}
+
+/** A TeX formula, typeset by KaTeX (an unparsable one shows its source instead of throwing). */
+function Tex({ tex, display }: { tex: string; display?: boolean }) {
+  const html = useMemo(() => {
+    try {
+      return katex.renderToString(tex, { displayMode: !!display, throwOnError: true, output: 'html', strict: 'ignore', trust: false });
+    } catch {
+      return null;
+    }
+  }, [tex, display]);
+  if (html == null) return <Text style={{ fontFamily: font.mono, fontSize: '0.9em' as unknown as number, color: c.ink3 }}>{display ? `$$${tex}$$` : `$${tex}$`}</Text>;
+  if (!display) return <span dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <View style={web({ overflowX: 'auto', overflowY: 'hidden', marginTop: 4, marginBottom: 14, paddingVertical: 4 })}>
+      <div style={{ color: c.ink, fontSize: 15.5, textAlign: 'center', minWidth: 'min-content' }} dangerouslySetInnerHTML={{ __html: html }} />
+    </View>
+  );
 }
 
 function plain(tokens?: Token[]): string {
@@ -144,6 +199,27 @@ function BlockView({ block, first, ...p }: { block: Block; first: boolean } & Ma
     }
     case 'paragraph': {
       const para = tok as Tokens.Paragraph;
+      // $$display$$ math gets its own row: the text around it is split into separate runs.
+      if (para.tokens.some(isDisplayMath)) {
+        const runs: Token[][] = [[]];
+        for (const x of para.tokens) {
+          if (isDisplayMath(x)) runs.push([x], []);
+          else runs[runs.length - 1].push(x);
+        }
+        return (
+          <View onLayout={onLayout} style={hl}>
+            {runs.map((run, i) =>
+              run.length === 1 && isDisplayMath(run[0]) ? (
+                <Tex key={i} tex={(run[0] as unknown as MathToken).text} display />
+              ) : trimBreaks(run).length ? (
+                <Text key={i} style={S.p}>
+                  <Inline tokens={trimBreaks(run)} {...p} />
+                </Text>
+              ) : null,
+            )}
+          </View>
+        );
+      }
       return (
         <View onLayout={onLayout} style={hl}>
           <Text style={S.p}>
@@ -414,6 +490,10 @@ function InlineToken({ tok, ...p }: { tok: Token } & MarkdownProps): React.React
           {wikiLabel(w) || wt.inner}
         </Text>
       );
+    }
+    case 'math': {
+      const m = tok as unknown as MathToken;
+      return <Tex tex={m.text} display={m.display} />;
     }
     case 'br':
       return <Text>{'\n'}</Text>;

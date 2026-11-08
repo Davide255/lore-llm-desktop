@@ -68,3 +68,7 @@ textarea::selection {
 @keyframes lore-spin {
   to { transform: rotate(360deg); }
 }
+
+/* KaTeX: follow the surrounding text colour */
+.katex { color: inherit; font-size: 1.1em; }
+.katex-display { margin: 0; }

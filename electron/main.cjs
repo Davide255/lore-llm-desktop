@@ -12,6 +12,7 @@ const auth = require('./auth.cjs');
 const { API_URL, request, requestRaw } = require('./api.cjs');
 const { toAgent, toPatch, applyAudit, refOf } = require('./agents.cjs');
 const { createMirror } = require('./mirror.cjs');
+const remote = require('./remote.cjs');
 const { scoped, teamOf, projectOf, checkProjectName, canWrite } = require('./spaces.cjs');
 const { VaultSync, scanVault, planSync, folderNames, kindOf } = require('./vault.cjs');
 const obsidian = require('./obsidian.cjs');
@@ -445,6 +446,27 @@ function search(query) {
   }
   results.sort((a, b) => b.total + (b.nameHit ? 5 : 0) - (a.total + (a.nameHit ? 5 : 0)));
   return results.slice(0, 60);
+}
+
+/**
+ * Search through the Worker's index (GET /v1/search), once per space (personal + each team), so it covers
+ * projects that were never opened. A space still being indexed (`truncated`) is asked again.
+ * Falls back to the local search when no space answers (offline, older server).
+ */
+async function serverSearch(query) {
+  const q = query.trim();
+  if (!q) return [];
+  const spaces = [null, ...mirror.teams.map((t) => t.id)];
+  const ask = async (teamId) => {
+    for (let i = 0; i < 6; i++) {
+      const res = await request('GET', '/v1/search', { query: { q: q.slice(0, 200), limit: 50, owner: teamId ? `t:${teamId}` : undefined } });
+      if (!res.truncated) return res;
+    }
+    return request('GET', '/v1/search', { query: { q: q.slice(0, 200), limit: 50, owner: teamId ? `t:${teamId}` : undefined } });
+  };
+  const answers = await Promise.all(spaces.map((id) => ask(id).then((r) => remote.hitsToResults(id, r.hits, q), () => null)));
+  if (answers.every((a) => a === null)) return search(q);
+  return remote.mergeResults(answers.filter(Boolean));
 }
 
 // Raw link targets per note ([[wikilinks]], embeds, markdown links); the renderer resolves them.
@@ -1174,7 +1196,19 @@ handle('kb:undoDelete', async (token) => {
   return true;
 });
 
-handle('kb:search', (q) => search(q));
+handle('kb:search', (q) => serverSearch(q).catch(() => search(q)));
+// Stars (notes and whole projects), private to the user, kept by the Worker.
+handle('stars:list', async () => {
+  try {
+    return remote.starsFromWire((await request('GET', '/v1/stars')).stars);
+  } catch {
+    return [];
+  }
+});
+handle('stars:set', async (rel, on) => {
+  await request(on ? 'PUT' : 'DELETE', '/v1/stars', { query: remote.starQuery(rel) });
+  return true;
+});
 handle('kb:links', () => linkIndex());
 handle('kb:activity', () => state.activity);
 handle('kb:markActivitySeen', () => {

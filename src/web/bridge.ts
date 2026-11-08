@@ -310,6 +310,29 @@ export function createWebBridge(): LoreBridge {
     return results.slice(0, 60);
   }
 
+  /** Server search (personal space); the local one answers when the server cannot. */
+  async function serverSearch(query: string) {
+    const q = query.trim();
+    if (!q) return [];
+    try {
+      let res = await request('GET', '/v1/search', { query: { q: q.slice(0, 200), limit: 50 } });
+      for (let i = 0; res.truncated && i < 6; i++) res = await request('GET', '/v1/search', { query: { q: q.slice(0, 200), limit: 50 } });
+      const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+      return (res.hits as any[]).slice(0, 60).map((h) => ({
+        path: h.path as string,
+        nameHit: !!h.pathMatch,
+        hits: (h.snippets as any[]).map((s) => {
+          const lower = String(s.text).toLowerCase();
+          const col = terms.map((t) => lower.indexOf(t)).filter((i) => i >= 0).sort((a, b) => a - b)[0] ?? 0;
+          return { line: s.line as number, col, text: s.text as string };
+        }),
+        total: Math.max(1, h.snippets.length),
+      }));
+    } catch {
+      return search(query);
+    }
+  }
+
   const LINK_RE = /!?\[\[([^\]\n]+)\]\]|\]\(\s*<([^>\n]+)>\s*\)|\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g;
   function linkIndex() {
     const out: Record<string, string[]> = {};
@@ -566,7 +589,19 @@ export function createWebBridge(): LoreBridge {
       return true;
     },
 
-    search: async (q) => search(q),
+    search: (q) => serverSearch(q),
+    stars: async () => {
+      try {
+        const { stars } = await request('GET', '/v1/stars');
+        return (stars as any[]).map((x) => ({ path: x.path as string, kind: x.kind === 'project' ? ('project' as const) : ('note' as const), at: x.starred_at as number }));
+      } catch {
+        return [];
+      }
+    },
+    setStar: async (path, on) => {
+      await request(on ? 'PUT' : 'DELETE', '/v1/stars', { query: { path } });
+      return true;
+    },
     links: async () => linkIndex(),
     activity: async () => state.activity,
     async markActivitySeen() {

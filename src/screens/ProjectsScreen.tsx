@@ -19,7 +19,14 @@ export function ProjectsScreen() {
   const pad = usePad();
   const list = projects(app.tree).slice();
   if (sort === 'recent') list.sort((a, b) => b.mtime - a.mtime);
+  // Starred projects go first (the sort above is stable, so each group keeps its order).
+  const starred = new Set(app.stars.filter((x) => x.kind === 'project').map((x) => x.path));
+  list.sort((a, b) => Number(starred.has(b.path)) - Number(starred.has(a.path)));
   const files = allFiles(app.tree) as FileNode[];
+  const starredNotes = app.stars
+    .filter((x) => x.kind === 'note')
+    .map((x) => files.find((f) => f.path === x.path))
+    .filter((f): f is FileNode => !!f);
   const recent = files.slice().sort((a, b) => b.mtime - a.mtime).slice(0, 6);
   const cols = compact ? 1 : width > 900 ? 3 : 2;
   const gap = 16;
@@ -67,7 +74,7 @@ export function ProjectsScreen() {
         <View onLayout={onLayout} style={{ flexDirection: 'row', flexWrap: 'wrap', gap }}>
           {list.map((p) => (
             <View key={p.path} style={{ width: cardW }}>
-              <ProjectCard project={p} />
+              <ProjectCard project={p} starred={starred.has(p.path)} />
             </View>
           ))}
           <View style={{ width: cardW }}>
@@ -93,6 +100,13 @@ export function ProjectsScreen() {
         </View>
       )}
 
+      {starredNotes.length ? (
+        <View>
+          <SectionLabel>Preferiti</SectionLabel>
+          <FileTable rows={starredNotes} columns={['project', 'modified', 'author']} header={false} />
+        </View>
+      ) : null}
+
       {recent.length ? (
         <View>
           <SectionLabel>Modificati di recente</SectionLabel>
@@ -103,8 +117,9 @@ export function ProjectsScreen() {
   );
 }
 
-function ProjectCard({ project }: { project: FolderNode }) {
+function ProjectCard({ project, starred }: { project: FolderNode; starred: boolean }) {
   const app = useApp();
+  const toggleStar = () => app.toggleStar(project.path);
   const pi = projectIcon(project.name);
   const index = project.children.find((n) => n.kind === 'file' && n.name.toLowerCase() === 'index.md') as FileNode | undefined;
   // Progress comes with the project's summary, whether it's open or not.
@@ -139,6 +154,12 @@ function ProjectCard({ project }: { project: FolderNode }) {
             </Text>
           </View>
         </View>
+        <Hover
+          onPress={toggleStar}
+          style={({ hovered }) => ({ borderRadius: 6, padding: 2, backgroundColor: hovered ? c.fill08 : 'transparent' })}
+        >
+          <Icon name="star" filled={starred} size={18} color={starred ? c.purpleTint : c.ink3} />
+        </Hover>
         <Hover
           onPress={(e: any) => {
             const pt = eventPoint(e);

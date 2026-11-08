@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { isWeb, lore } from '../kb/bridge';
-import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, MyInvite, NewAgent, ObsidianStatus, PendingUpload, Permission, Prefs, SignInProvider, Team, TeamRole, TreeNode, UploadFile, VaultStatus } from '../kb/types';
+import type { ActivityEvent, Agent, AgentKind, AuditItem, AuthUser, ChangedEvent, MyInvite, NewAgent, ObsidianStatus, PendingUpload, Permission, Prefs, SignInProvider, Star, Team, TeamRole, TreeNode, UploadFile, VaultStatus } from '../kb/types';
 import { basename, dirname, fileKind, findNode, projectKeyOf, projectLabel as projectLabelOf, unloadedProject } from '../kb/paths';
 
 export type Route =
@@ -91,6 +91,10 @@ interface AppCtx {
   markSeen: () => void;
   prefs: Prefs;
   setPrefs: (p: Prefs) => void;
+  /** Starred notes and projects (private to the user, kept by the server). */
+  stars: Star[];
+  isStarred: (path: string) => boolean;
+  toggleStar: (path: string) => Promise<void>;
   agents: Agent[];
   createAgent: (a: { kind: AgentKind; name: string; permission: Permission; scope: string[] }) => Promise<NewAgent | undefined>;
   updateAgent: (id: string, patch: Partial<Pick<Agent, 'name' | 'kind' | 'permission' | 'scope'>>) => Promise<void>;
@@ -178,6 +182,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [lastSeen, setLastSeen] = useState(0);
   const [prefs, setPrefsState] = useState<Prefs>({});
+  const [stars, setStars] = useState<Star[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [audit, setAudit] = useState<AuditItem[]>([]);
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -610,6 +615,28 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Stars: loaded once signed in and again whenever the files change (another device may have starred).
+  useEffect(() => {
+    if (user) lore.stars().then(setStars, () => {});
+    else setStars([]);
+  }, [user, revision]);
+  const isStarred = useCallback((path: string) => stars.some((s) => s.path === path), [stars]);
+  const toggleStar = useCallback(
+    async (path: string) => {
+      const on = !stars.some((s) => s.path === path);
+      const before = stars;
+      // Instant feedback; put back if the server refuses.
+      setStars(on ? [{ path, kind: path.includes('/') ? 'note' : 'project', at: Date.now() }, ...stars] : stars.filter((s) => s.path !== path));
+      try {
+        await lore.setStar(path, on);
+      } catch (err) {
+        setStars(before);
+        toast({ icon: 'error', text: err instanceof Error ? err.message : 'Impossibile aggiornare i preferiti' });
+      }
+    },
+    [stars], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const setPrefs = useCallback((p: Prefs) => {
     setPrefsState((cur) => ({ ...cur, ...p }));
     lore.setPrefs(p);
@@ -741,6 +768,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     markSeen,
     prefs,
     setPrefs,
+    stars,
+    isStarred,
+    toggleStar,
     agents,
     createAgent,
     updateAgent,

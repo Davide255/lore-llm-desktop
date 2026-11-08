@@ -183,6 +183,7 @@ export function IconBtn({
   iconSize = 19,
   color = c.ink2,
   active,
+  filled,
   title,
   disabled,
   style,
@@ -193,6 +194,7 @@ export function IconBtn({
   iconSize?: number;
   color?: string;
   active?: boolean;
+  filled?: boolean;
   title?: string;
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -210,7 +212,7 @@ export function IconBtn({
         style,
       ]}
     >
-      <Icon name={icon} size={iconSize} color={active ? c.purpleTint : color} />
+      <Icon filled={filled} name={icon} size={iconSize} color={active ? c.purpleTint : color} />
     </Hover>
   );
 }

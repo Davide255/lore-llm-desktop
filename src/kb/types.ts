@@ -115,6 +115,13 @@ export interface SearchHit {
   text: string;
 }
 
+/** A starred note or project (`path` is the project key for a project). */
+export interface Star {
+  path: string;
+  kind: 'note' | 'project';
+  at: number;
+}
+
 export interface SearchResult {
   path: string;
   nameHit: boolean;
@@ -342,6 +349,8 @@ export interface LoreBridge {
   remove(path: string): Promise<string>;
   undoDelete(token: string): Promise<boolean>;
   search(q: string): Promise<SearchResult[]>;
+  stars(): Promise<Star[]>;
+  setStar(path: string, on: boolean): Promise<boolean>;
   /** Raw link targets per note: `[[...]]` for wikilinks, the href for markdown links. */
   links(): Promise<Record<string, string[]>>;
   activity(): Promise<ActivityEvent[]>;

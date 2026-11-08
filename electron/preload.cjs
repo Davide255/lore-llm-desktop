@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('lore', {
   remove: call('kb:delete'),
   undoDelete: call('kb:undoDelete'),
   search: call('kb:search'),
+  stars: call('stars:list'),
+  setStar: call('stars:set'),
   links: call('kb:links'),
   activity: call('kb:activity'),
   markActivitySeen: call('kb:markActivitySeen'),

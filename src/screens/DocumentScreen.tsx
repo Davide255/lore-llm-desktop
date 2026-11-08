@@ -98,6 +98,15 @@ export function DocumentScreen({ path }: { path: string }) {
     <View style={{ flex: 1 }} onLayout={onLayout}>
       <FileBar title={basename(path)} subtitle={subtitle}>
         {app.obsidianReady ? <IconBtn icon="open_in_new" title="Apri in Obsidian" onPress={() => app.openInObsidian(path)} /> : null}
+        {readOnly ? null : (
+          <IconBtn
+            icon="star"
+            filled={app.isStarred(path)}
+            color={app.isStarred(path) ? c.purpleTint : c.ink2}
+            title={app.isStarred(path) ? 'Togli dai preferiti' : 'Aggiungi ai preferiti'}
+            onPress={() => app.toggleStar(path)}
+          />
+        )}
         <IconBtn icon="ios_share" title="Copia link" onPress={() => app.ops.copyLink(path)} />
         {readOnly || viewer ? (
           compact ? null : <Btn icon="lock" label="Sola lettura" textColor={c.ink3} disabled style={{ opacity: 1 }} />
