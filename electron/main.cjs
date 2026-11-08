@@ -869,14 +869,23 @@ function createWindow({ hidden = false } = {}) {
     e.preventDefault();
     if (action === 'hide') {
       allowClose = false;
-      win.hide();
+      // A full-screen window lives in its own macOS Space: leave it first, or hiding it loses the window.
+      if (isMac && win.isFullScreen()) {
+        win.once('leave-full-screen', () => {
+          win.hide();
+          app.dock?.hide();
+        });
+        win.setFullScreen(false);
+      } else {
+        win.hide();
+        if (isMac) app.dock?.hide();
+      }
     } else send('app:close-requested');
   });
   // No Dock icon while the app only runs in the background (the menu-bar icon stays).
-  if (isMac) {
-    win.on('hide', () => backgroundActive() && app.dock?.hide());
-    win.on('show', () => app.dock?.show());
-  }
+  // (The Dock icon is hidden where the window is hidden, not on the 'hide' event: macOS also emits
+  // that when a window enters full screen, which made the app vanish.)
+  if (isMac) win.on('show', () => app.dock?.show());
 }
 
 // ---------------------------------------------------------------------------
@@ -1547,7 +1556,7 @@ handle('ota:ready', () => {
 });
 handle('ota:status', () => ota?.info() ?? { enabled: false, phase: 'idle', appVersion: app.getVersion(), channel: 'production', version: null });
 handle('ota:check', () => ota?.check({ force: true }));
-// Restart into the downloaded bundle. The session lives encrypted in userData (never in the renderer),
+// Restart into the downloaded bundle. The session lives in userData (never in the renderer),
 // so a restart keeps the login; it is written out first, and if it cannot be kept we do not restart.
 handle('ota:apply', async () => {
   if (!ota?.pendingVersion()) return false;

@@ -182,8 +182,8 @@ The build reads `LORE_API_URL` and `LORE_COGNITO_DOMAIN` like the desktop app (A
 Optional; the local knowledge base works without an account. Login goes through the
 Cognito user pool the [lore-llm](https://github.com/Davide255/lore-llm) Worker trusts, with Google as federated IdP
 (`electron/auth.cjs`): Authorization Code + PKCE in the system browser, callback on
-`http://localhost:42813/callback`. Tokens stay in the main process, encrypted with
-`safeStorage` in `<userData>/lore-auth.bin`; the renderer only sees name and email.
+`http://localhost:42813/callback`. Tokens stay in the main process, in a user-only
+file, `<userData>/lore-auth.json` (no `safeStorage`: it asks for the Keychain password); the renderer only sees name and email.
 `auth.idToken()` returns a fresh ID token for `Authorization: Bearer` calls to `/v1/*`.
 
 The Cognito app client must be public (no secret), allow the `code` flow, the

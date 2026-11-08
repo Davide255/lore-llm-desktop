@@ -1,8 +1,9 @@
 // Sign in with Google or Apple, brokered by AWS Cognito (the same user pool the
 // lore-llm Worker trusts). Authorization Code + PKCE in the system browser,
 // callback caught by a short-lived loopback server. Tokens never reach the
-// renderer: they stay in the main process, encrypted at rest with safeStorage.
-const { app, safeStorage, shell } = require('electron');
+// renderer: they stay in the main process, in a user-only (0600) file in userData. (safeStorage is
+// not used: on macOS it prompts for the Keychain password on every launch.)
+const { app, shell } = require('electron');
 const crypto = require('node:crypto');
 const http = require('node:http');
 const path = require('node:path');
@@ -21,7 +22,7 @@ const LOGIN_TIMEOUT_MS = 5 * 60_000;
 // Identity providers configured on the user pool (Cognito's names for them).
 const PROVIDERS = { google: 'Google', apple: 'SignInWithApple' };
 
-const storePath = () => path.join(app.getPath('userData'), 'lore-auth.bin');
+const storePath = () => path.join(app.getPath('userData'), 'lore-auth.json');
 const b64url = (buf) => Buffer.from(buf).toString('base64url');
 
 /** @type {{ idToken: string, accessToken: string, refreshToken: string, expiresAt: number } | null} */
@@ -35,11 +36,12 @@ let refreshing = null;
 // ---------------------------------------------------------------------------
 function load() {
   try {
-    if (!safeStorage.isEncryptionAvailable()) return;
-    session = JSON.parse(safeStorage.decryptString(fs.readFileSync(storePath())));
+    session = JSON.parse(fs.readFileSync(storePath(), 'utf8'));
   } catch {
     session = null;
   }
+  // Older versions stored the session encrypted with safeStorage; it cannot be read without the Keychain.
+  fsp.rm(path.join(app.getPath('userData'), 'lore-auth.bin'), { force: true }).catch(() => {});
 }
 
 async function persist() {
@@ -47,19 +49,15 @@ async function persist() {
     await fsp.rm(storePath(), { force: true });
     return;
   }
-  // Without OS encryption the session lives in memory only (sign in again next launch).
-  if (!safeStorage.isEncryptionAvailable()) return;
-  await fsp.writeFile(storePath(), safeStorage.encryptString(JSON.stringify(session)));
+  await fsp.writeFile(storePath(), JSON.stringify(session), { mode: 0o600 });
 }
 
-/** The session survives a restart: it is (or will be) on disk, or there is none to keep. */
-const canPersist = () => !session || safeStorage.isEncryptionAvailable();
+/** The session survives a restart: it is on disk, or there is none to keep. */
+const canPersist = () => true;
 
-/** Writes the current session to disk now (before a restart for an update). Rejects if it cannot. */
+/** Writes the current session to disk now (before a restart for an update). */
 async function flush() {
-  if (!session) return;
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Il login non può essere salvato su disco');
-  await persist();
+  if (session) await persist();
 }
 
 // ---------------------------------------------------------------------------
