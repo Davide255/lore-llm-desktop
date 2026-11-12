@@ -2,6 +2,7 @@
 // Worker must list this page's origin in ALLOWED_ORIGINS (CORS).
 import * as auth from './auth';
 import { API_URL } from './config';
+import { teamOfRequest, translate, untranslate, type Query } from './spaces';
 
 export class ApiError extends Error {
   constructor(
@@ -15,13 +16,12 @@ export class ApiError extends Error {
 // Server messages are English; the UI is Italian.
 function message(status: number, error?: string) {
   if (status === 401) return 'Sessione non valida: esci e accedi di nuovo';
+  if (status === 403) return 'Non hai i permessi per questa operazione (accesso in sola lettura?)';
   if (status === 409) return 'Il file è stato modificato nel frattempo (da un agente o da un altro dispositivo): ricarica e riprova';
   if (/already exists/i.test(error ?? '')) return 'Esiste già un file con questo nome';
   if (/too large/i.test(error ?? '')) return 'File o cartella troppo grande';
   return error || `Errore del server (${status})`;
 }
-
-type Query = Record<string, string | number | undefined>;
 
 function urlFor(path: string, query?: Query) {
   const url = new URL(API_URL + path);
@@ -39,7 +39,16 @@ async function send(method: string, path: string, query: Query | undefined, init
   }
 }
 
-export async function request<T = any>(method: string, path: string, { query, body }: { query?: Query; body?: unknown } = {}): Promise<T> {
+/**
+ * Both clients below take rel paths of any space (`Project/note.md` or `Project@<teamId>/note.md`):
+ * the owner travels as `?owner=t:<id>` and paths in the answer come back as rel paths (spaces.ts).
+ */
+export async function request<T = any>(method: string, path: string, opts: { query?: Query; body?: unknown } = {}): Promise<T> {
+  const { query, body, teamId } = translate(opts.query, opts.body);
+  return untranslate(await plainRequest<T>(method, path, { query, body }), teamOfRequest(teamId, query));
+}
+
+async function plainRequest<T>(method: string, path: string, { query, body }: { query?: Query; body?: unknown } = {}): Promise<T> {
   const res = await send(method, path, query, body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(message(res.status, data.error), res.status);
@@ -48,6 +57,16 @@ export async function request<T = any>(method: string, path: string, { query, bo
 
 /** Binary twin of `request` for attachments. */
 export async function requestRaw(
+  method: string,
+  path: string,
+  opts: { query?: Query; body?: BodyInit; headers?: Record<string, string>; onProgress?: (sent: number, total: number) => void } = {},
+): Promise<{ status: number; headers: Headers; json?: any; blob?: Blob }> {
+  const { query, teamId } = translate(opts.query);
+  const res = await plainRequestRaw(method, path, { ...opts, query });
+  return res.json ? { ...res, json: untranslate(res.json, teamOfRequest(teamId, query)) } : res;
+}
+
+async function plainRequestRaw(
   method: string,
   path: string,
   { query, body, headers, onProgress }: { query?: Query; body?: BodyInit; headers?: Record<string, string>; onProgress?: (sent: number, total: number) => void } = {},

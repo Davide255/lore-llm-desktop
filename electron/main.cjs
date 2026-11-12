@@ -11,6 +11,7 @@ const fsp = require('node:fs/promises');
 const { structuredPatch } = require('diff');
 const auth = require('./auth.cjs');
 const { API_URL, request, requestRaw } = require('./api.cjs');
+const { createInviteGate } = require('./invites.cjs');
 const { toAgent, toPatch, applyAudit, refOf } = require('./agents.cjs');
 const { createMirror } = require('./mirror.cjs');
 const remote = require('./remote.cjs');
@@ -75,6 +76,7 @@ function onUser(user) {
   releaseAccess();
   primed = false;
   lastInvites = null;
+  inviteGate.reset();
   mirror.reset();
   writers = new Map();
   if (user && user.id !== state.userId) {
@@ -381,8 +383,6 @@ async function poll({ force = false } = {}) {
   polling = true;
   lastPollAt = Date.now();
   try {
-    // Invitations addressed to you show up while the window is in front (one request).
-    if (focused) await myInvites().catch(() => {});
     if (versionApi) {
       try {
         // One request: the cursors of the user's own space and of each team.
@@ -957,6 +957,8 @@ function createWindow({ hidden = false } = {}) {
 
   // Coming back to the app: look for agent writes right away.
   win.on('focus', () => {
+    // Invitations addressed to you: read at launch (the renderer asks) and when coming back, at most every 5 minutes.
+    if (inviteGate.due() && auth.user()) myInvites().catch(() => {});
     poll({ force: true });
     ota?.check();
   });
@@ -1395,8 +1397,10 @@ const toMyInvite = (i) => ({
   createdAt: Date.parse(i.created_at) || 0,
   expiresAt: Date.parse(i.expires_at) || 0,
 });
+const inviteGate = createInviteGate();
 let lastInvites = null;
 async function myInvites() {
+  inviteGate.mark();
   const invites = (await request('GET', '/v1/invites')).invites.map(toMyInvite);
   const stamp = JSON.stringify(invites.map((i) => i.id));
   if (lastInvites !== null && stamp !== lastInvites) send('invites:changed', invites);
