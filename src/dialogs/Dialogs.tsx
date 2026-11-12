@@ -6,7 +6,7 @@ import { allFolders, basename, teamIdOf, countFiles, dirname, fileKind, findNode
 import { Btn, Field, FieldLabel, Hint, Hover, Icon, IconWell, InfoStrip } from '../ui/primitives';
 import { canWrite, ROLE_LABEL } from '../kb/teams';
 import { DialogFooter, DialogFrame, DialogTitle, anchorBelow } from '../ui/overlays';
-import { VaultConfirmDialog, VaultDisableDialog, VaultSetupDialog } from './VaultDialogs';
+import { VaultConfirmDialog, VaultSetupDialog } from './VaultDialogs';
 
 export function DialogHost() {
   const { dialog, openDialog } = useApp();
@@ -28,11 +28,9 @@ export function DialogHost() {
     case 'unsaved':
       return <UnsavedDialog next={dialog.next} onClose={close} />;
     case 'vaultSetup':
-      return <VaultSetupDialog onClose={close} />;
+      return <VaultSetupDialog projectKey={dialog.key} pickFolder={dialog.folder} onClose={close} />;
     case 'vaultConfirm':
       return <VaultConfirmDialog count={dialog.count} paths={dialog.paths} onClose={close} />;
-    case 'vaultDisable':
-      return <VaultDisableDialog onClose={close} />;
     case 'moveToTeam':
       return <MoveToTeamDialog path={dialog.path} onClose={close} />;
     case 'otaUpdate':

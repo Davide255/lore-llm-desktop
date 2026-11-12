@@ -50,8 +50,6 @@ contextBridge.exposeInMainWorld('lore', {
   vaultStatus: call('vault:status'),
   vaultChooseRoot: call('vault:chooseRoot'),
   vaultPreview: call('vault:preview'),
-  vaultEnable: call('vault:enable'),
-  vaultDisable: call('vault:disable'),
   vaultSyncNow: call('vault:syncNow'),
   vaultConfirm: call('vault:confirm'),
   vaultReveal: call('vault:reveal'),

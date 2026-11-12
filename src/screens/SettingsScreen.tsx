@@ -284,7 +284,7 @@ function SystemPrefs() {
             {!sys.supported
               ? 'Non disponibile su questo sistema.'
               : !vaultOn
-                ? 'Si attiva con la copia locale per Obsidian: attivala nella sezione Obsidian.'
+                ? 'Si attiva quando un progetto ha una cartella Obsidian: scegline una nella sezione Obsidian.'
                 : sys.background
                   ? `Chiudere la finestra non chiude l'app: resta ${isMac ? 'nella barra dei menu' : "nell'area di notifica"} e continua a sincronizzare. Per uscire usa «Esci» dal suo menu.`
                   : "Chiudere la finestra chiude l'app e ferma la sincronizzazione."}
@@ -311,7 +311,7 @@ function DefaultEditorCard() {
         <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
           {app.obsidianReady
             ? 'Modifica, il tasto E e il doppio clic aprono le note qui o in Obsidian. Le checklist restano in Lore.'
-            : 'Per usare Obsidian attiva prima la copia locale nella sezione Obsidian.'}
+            : 'Per usare Obsidian dai prima una cartella a un progetto nella sezione Obsidian.'}
         </Text>
       </View>
       <Segmented
@@ -348,55 +348,29 @@ function ObsidianPrefs() {
     <>
       <Header
         title="Obsidian"
-        body="Modifica la knowledge base con Obsidian. Lore ne tiene una copia in una cartella del computer e la sincronizza con il cloud nei due sensi: le modifiche degli agenti arrivano in Obsidian, le tue arrivano agli agenti."
+        body="Modifica i progetti con Obsidian. Ogni progetto ha la sua cartella sul computer, che è un vault a sé: Lore la sincronizza con il cloud nei due sensi, le modifiche degli agenti arrivano in Obsidian e le tue arrivano agli agenti."
       />
       <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
         <IconWell icon="hub" tint="purple" />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={t(500, 14, 1.3)}>Obsidian</Text>
           <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
-            {!o.installed ? 'Non trovato su questo computer.' : o.registered ? 'Installato · la copia locale è aperta come vault.' : on ? 'Installato · apri la cartella della copia locale come vault.' : 'Installato.'}
+            {!o.installed ? 'Non trovato su questo computer.' : o.registered ? 'Installato · le cartelle dei progetti sono aperte come vault.' : on ? 'Installato · apri la cartella di ogni progetto come vault.' : 'Installato.'}
           </Text>
         </View>
-        {o.installed ? (
-          on ? <Btn icon="open_in_new" label="Apri in Obsidian" onPress={() => app.openInObsidian()} /> : null
-        ) : (
-          <Btn icon="download" label="Scarica Obsidian" onPress={() => window.open('https://obsidian.md/download', '_blank')} />
-        )}
+        {!o.installed ? <Btn icon="download" label="Scarica Obsidian" onPress={() => window.open('https://obsidian.md/download', '_blank')} /> : null}
       </Card>
 
-      <Card style={{ gap: 12 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <View style={{ flex: 1 }}>
-            <Text style={t(500, 14, 1.3)}>Copia locale della knowledge base</Text>
-            <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
-              Una cartella normale con un file .md per nota. Obsidian (o qualsiasi editor) lavora lì; Lore carica e scarica le modifiche.
-            </Text>
-          </View>
-          <Toggle value={on} onChange={(next) => app.openDialog(next ? { kind: 'vaultSetup' } : { kind: 'vaultDisable' })} />
-        </View>
-        {on && v?.root ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: radius.md, backgroundColor: c.fill04 }}>
-            <Icon name="folder" filled size={17} color={c.blueTint} />
-            <Text numberOfLines={1} style={{ flex: 1, fontFamily: font.mono, fontSize: 12.5, color: c.ink2 }}>
-              {v.root}
-            </Text>
-            <Btn height={30} icon="content_copy" label="Copia percorso" onPress={() => lore.copy(v.root!)} />
-            <Btn height={30} icon="folder_open" label="Mostra cartella" onPress={() => lore.vaultReveal()} />
-          </View>
-        ) : null}
-      </Card>
+      <VaultProjectsCard />
 
       {on && v ? <VaultStatusCard v={v} /> : null}
-
-      {on && v ? <VaultProjectsCard /> : null}
 
       {on && v ? (
         <Card style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           <View style={{ flex: 1 }}>
             <Text style={t(500, 14, 1.3)}>Formato dei link</Text>
             <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3 })}>
-              Come Obsidian scrive i nuovi link. I link Markdown li leggono anche agenti e app mobile; Lore capisce entrambi. Riavvia Obsidian per applicare.
+              Come Obsidian scrive i nuovi link, in tutti i progetti. I link Markdown li leggono anche agenti e app mobile; Lore capisce entrambi. Riavvia Obsidian per applicare.
             </Text>
           </View>
           <Segmented
@@ -416,18 +390,22 @@ function ObsidianPrefs() {
   );
 }
 
-/** Per-project switches: your own projects sync by default, team projects when you turn them on. */
+/** One folder per project: each project is switched on by giving it a folder, and off without touching it. */
 function VaultProjectsCard() {
   const app = useApp();
   const [list, setList] = useState<VaultProject[] | null>(null);
   const load = React.useCallback(() => lore.vaultProjects().then(setList).catch(() => {}), []);
   useEffect(() => {
     load();
+    // Obsidian opens the folder on its own time: keep the "aperta in Obsidian" mark current.
+    const id = setInterval(load, 4000);
+    return () => clearInterval(id);
   }, [load, app.tree]);
-  const set = async (p: VaultProject, on: boolean) => {
-    setList((cur) => cur?.map((x) => (x.key === p.key ? { ...x, selected: on } : x)) ?? cur);
+  const off = async (p: VaultProject) => {
+    setList((cur) => cur?.map((x) => (x.key === p.key ? { ...x, root: null } : x)) ?? cur);
     try {
-      await lore.vaultSetProject(p.key, on);
+      await lore.vaultSetProject(p.key, null);
+      await app.refreshVault();
     } catch (e) {
       app.toast({ icon: 'error', text: e instanceof Error ? e.message : String(e) });
     }
@@ -436,27 +414,35 @@ function VaultProjectsCard() {
   if (!list?.length) return null;
   return (
     <Card style={{ gap: 4 }}>
-      <Text style={t(500, 14, 1.3)}>Progetti nella copia locale</Text>
+      <Text style={t(500, 14, 1.3)}>Cartelle dei progetti</Text>
       <Text style={t(400, 12, 1.4, { color: c.ink3, marginTop: 3, marginBottom: 8 })}>
-        I tuoi progetti sono inclusi, quelli dei team li aggiungi tu. Togliere un progetto lascia la sua cartella sul computer: smette solo di sincronizzarsi.
+        Scegli una cartella per ogni progetto che vuoi modificare in Obsidian: le note ci stanno direttamente dentro e la cartella è il vault. I progetti senza cartella restano solo in Lore. Togliere un progetto lascia la sua cartella sul computer: smette solo di sincronizzarsi.
       </Text>
       {list.map((p) => (
-        <View key={p.key} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 40, borderTopWidth: 1, borderColor: c.hair }}>
+        <View key={p.key} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, paddingVertical: 4, borderTopWidth: 1, borderColor: c.hair }}>
           <Icon name={p.team ? 'groups' : 'folder_special'} size={17} color={p.team ? c.blueTint : c.purpleTint} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text numberOfLines={1} style={t(500, 13, 1.3)}>
               {p.name}
               {p.team ? <Text style={{ color: c.ink3, fontWeight: '400' }}>{` · ${p.team.name}`}</Text> : null}
+              {p.access === 'viewer' ? <Text style={{ color: c.ink3, fontWeight: '400' }}>{' · sola lettura'}</Text> : null}
             </Text>
-            {p.selected && p.folder !== p.name ? (
+            {p.root ? (
               <Text numberOfLines={1} style={{ fontFamily: font.mono, fontSize: 11.5, color: c.ink3, marginTop: 2 }}>
-                {p.folder}/{p.access === 'viewer' ? ' · sola lettura' : ''}
+                {p.root}
               </Text>
-            ) : p.access === 'viewer' ? (
-              <Text style={t(400, 11.5, 1.3, { color: c.ink3, marginTop: 2 })}>Sola lettura</Text>
             ) : null}
           </View>
-          <Toggle value={p.selected} onChange={(next) => set(p, next)} />
+          {p.root ? (
+            <>
+              <Btn height={30} icon="open_in_new" label={p.registered ? 'Apri' : 'Apri in Obsidian'} onPress={() => app.openInObsidian(p.key)} />
+              <Btn height={30} icon="folder_open" label="Mostra" onPress={() => lore.vaultReveal(p.key)} />
+              <Btn height={30} icon="drive_file_move" label="Cambia…" onPress={() => app.openDialog({ kind: 'vaultSetup', key: p.key, folder: true })} />
+            </>
+          ) : (
+            <Btn height={30} icon="create_new_folder" label="Scegli cartella…" onPress={() => app.openDialog({ kind: 'vaultSetup', key: p.key })} />
+          )}
+          <Toggle value={!!p.root} onChange={(next) => (next ? app.openDialog({ kind: 'vaultSetup', key: p.key }) : off(p))} />
         </View>
       ))}
     </Card>
