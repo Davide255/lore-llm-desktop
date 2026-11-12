@@ -527,6 +527,8 @@ class VaultSync {
         this.manifest.files[nk] = { ...this.manifest.files[k], etag: snap.get(nk)?.etag ?? this.manifest.files[k].etag };
         delete this.manifest.files[k];
       }
+      // A whole project changed key: its remembered folder belongs to the new key now.
+      if (!from.includes('/')) delete this.manifest.folders?.[from];
       await this.pruneDirs(parentOf(from));
       await this.saveManifest();
     });

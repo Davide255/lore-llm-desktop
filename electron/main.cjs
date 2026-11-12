@@ -1342,6 +1342,8 @@ handle('projects:moveToTeam', async (key, teamId) => {
   const wasLoaded = mirror.loaded.has(key);
   const synced = vaultSelected(key);
   const next = `${key}@${teamId}`;
+  // Where the project's folder is now, resolved while the old key still maps to it.
+  const fromAbs = synced && vault?.running ? vault.abs(key) : null;
   await request('POST', `/v1/projects/${encodeURIComponent(key)}/move-to-team`, { body: { team_id: teamId } });
   // Same bytes under the new key: authorship, empty folders and the open list follow.
   const rekey = (rel) => (under(rel, key) ? next + rel.slice(key.length) : rel);
@@ -1359,6 +1361,9 @@ handle('projects:moveToTeam', async (key, teamId) => {
   mirror.forget(key);
   await mirror.syncSummaries();
   if (wasLoaded || synced) await mirror.loadProject(next).catch(() => {});
+  // The Obsidian folder (with its .obsidian settings) follows the project into `Name (Team)`
+  // and the manifest takes the new keys, before any pass could read it as a new personal project.
+  await vault?.renameLocal(key, next, fromAbs);
   await resync();
   vault?.kick();
   send('kb:changed', { paths: [], external: false });

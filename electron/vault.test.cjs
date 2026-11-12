@@ -513,6 +513,36 @@ test('team projects sit in "Name (Team)" folders and move when the team is renam
   assert.ok(Object.keys(engine.manifest.files).includes('Y@T1/c.md'));
 });
 
+test('a personal project moved into a team keeps its Obsidian folder (with .obsidian) and is not recreated', async (t) => {
+  const layout = testLayout();
+  const { root, engine, mirror, write, pass, disk, trashed } = await setup(t, { 'P/a.md': 'a\n', 'P/sub/b.md': 'b\n', 'Q/q.md': 'q\n' }, { layout });
+  await engine.start();
+  // The user opened the project in Obsidian: workspace settings live in the project folder.
+  await write('P/.obsidian/app.json', '{"theme":"x"}');
+  await write('P/a.md', 'a2\n');
+  await pass();
+
+  // moveToTeam: folder resolved first, then the server copies the project under the team's key.
+  const before = engine.abs('P');
+  await mirror.move('P', 'P@T1');
+  layout.st.folders['P@T1'] = 'P (Squadra)';
+  mirror.calls.length = 0;
+  await engine.renameLocal('P', 'P@T1', before);
+  await pass();
+
+  assert.equal(disk('P (Squadra)/a.md'), 'a2\n');
+  assert.equal(disk('P (Squadra)/sub/b.md'), 'b\n');
+  assert.equal(disk('P (Squadra)/.obsidian/app.json'), '{"theme":"x"}', 'Obsidian settings follow the project');
+  assert.ok(!fs.existsSync(path.join(root, 'P')), 'no leftover personal folder');
+  assert.deepEqual(mirror.calls, [], 'nothing re-uploaded or deleted in the cloud');
+  assert.deepEqual(trashed, []);
+  assert.ok(!mirror.store.has('P/a.md'), 'no personal project P recreated');
+  assert.equal(disk('Q/q.md'), 'q\n', 'other projects untouched');
+  const keys = Object.keys(engine.manifest.files);
+  assert.ok(keys.includes('P@T1/a.md') && !keys.some((k) => k.startsWith('P/')), 'manifest moved to the team keys');
+  assert.ok(!('P' in (engine.manifest.folders ?? {})));
+});
+
 test('read-only projects: files are read-only, local edits are reverted, new files stay local', async (t) => {
   const layout = testLayout({ folders: { 'V@T1': 'V (Squadra)' }, readonly: ['V@T1'] });
   const { root, engine, mirror, write, pass, disk, events } = await setup(t, { 'V@T1/a.md': 'a\n' }, { layout });
