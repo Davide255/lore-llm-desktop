@@ -181,6 +181,9 @@ function fakeBridge({ signedIn, vault = false, ota = null }) {
     remove: rec('remove', async () => 't'),
     undoDelete: rec('undoDelete', async () => true),
     search: rec('search', async () => []),
+    // Stars (2.0.0): read at sign-in; the fake keeps none.
+    stars: rec('stars', async () => []),
+    setStar: rec('setStar', async () => true),
     links: rec('links', async () => state.links),
     vaultStatus: rec('vaultStatus', async () => state.vault),
     vaultChooseRoot: rec('vaultChooseRoot', async () => null),
@@ -466,15 +469,15 @@ test('projects load when opened: cards show the summary, the project loads on cl
   await page.close();
 });
 
-test('search offers to load the projects not opened yet', async () => {
+test('search covers the projects not opened yet without loading them (server search, 2.0.0)', async () => {
   const { page, errors } = await open();
   await page.getByText('Cerca', { exact: true }).first().click();
   await page.getByPlaceholder('Cerca in tutti i progetti…').fill('zebra');
-  await page.getByText('Cerca in tutti i progetti (1 non ancora aperti)').click();
-  await page.waitForFunction(() => window.__calls.some((c) => c.name === 'loadAll'));
-  await page.getByText('Cerca in tutti i progetti (1 non ancora aperti)').waitFor({ state: 'detached' });
-  // The query runs again over every project.
-  await page.waitForFunction(() => window.__calls.filter((c) => c.name === 'search').length >= 2);
+  // One query to the main process, which asks the server's index for every space.
+  await page.waitForFunction(() => window.__calls.some((c) => c.name === 'search' && c.args[0] === 'zebra'));
+  await page.waitForTimeout(300);
+  assert.equal(await page.getByText(/non ancora aperti/).count(), 0, 'no "load the other projects" step any more');
+  assert.ok(!(await page.evaluate(() => window.__calls.some((c) => c.name === 'loadAll'))), 'nothing is loaded to search');
   assert.deepEqual(errors, []);
   await page.close();
 });
