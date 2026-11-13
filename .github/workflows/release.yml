@@ -1,0 +1,86 @@
+# Builds the Windows installer and publishes a GitHub release.
+# Runs when package.json's "version" changes on main (or by hand). The release is only
+# created once per version: if the tag v<version> already exists, the run is skipped.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  release:
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick the version
+        id: target
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "Release v$version already exists, nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - uses: actions/setup-node@v4
+        if: steps.target.outputs.skip != 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        if: steps.target.outputs.skip != 'true'
+        run: npm ci
+
+      - name: Build
+        if: steps.target.outputs.skip != 'true'
+        run: npm run build
+
+      - name: Package for Windows
+        if: steps.target.outputs.skip != 'true'
+        run: npx electron-builder --win --publish never
+
+      - name: Create the release
+        if: steps.target.outputs.skip != 'true'
+        shell: bash
+        run: |
+          gh release create "v${{ steps.target.outputs.version }}" \
+            --target "$GITHUB_SHA" \
+            --title "v${{ steps.target.outputs.version }}" \
+            --generate-notes \
+            release/*.exe release/*.exe.blockmap release/latest.yml
+        env:
+          GH_TOKEN: ${{ github.token }}

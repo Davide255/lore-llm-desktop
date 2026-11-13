@@ -2,12 +2,13 @@
 // electron/main.cjs does behind IPC, done in the page against the Worker.
 // No local vault or Obsidian here — a browser has no folder to keep in sync.
 import { structuredPatch } from 'diff';
-import type { ActivityEvent, AgentKind, AgentRef, AuthUser, ChangedEvent, LoreBridge, Prefs, TreeNode, UploadEvent, UploadFile, VaultStatus } from '../kb/types';
+import type { ActivityEvent, AgentKind, AgentRef, AuthUser, ChangedEvent, LoreBridge, MyInvite, Prefs, ProjectMeta, Team, TreeNode, UploadEvent, UploadFile, VaultStatus } from '../kb/types';
 import * as auth from './auth';
 import { request } from './api';
 import { API_URL } from './config';
 import { readPickedFolder } from '../kb/dropped';
-import { createMirror, isMd, type Meta } from './mirror';
+import { createMirror, isMd, type Meta, type TeamRow } from './mirror';
+import { fromWire, ownerOf, parseKey, teamOf } from './spaces';
 
 const POLL_MS = 5000;
 const STATE_KEY = 'lore-state';
@@ -61,8 +62,6 @@ function channel<T>() {
 const VAULT_OFF: VaultStatus = {
   state: 'off',
   enabled: false,
-  root: null,
-  defaultRoot: null,
   linkFormat: 'markdown',
   pending: 0,
   lastSyncAt: null,
@@ -72,6 +71,25 @@ const VAULT_OFF: VaultStatus = {
   confirm: null,
 };
 const noVault = () => Promise.reject(new Error('La copia locale per Obsidian è disponibile solo nell’app desktop'));
+const toTeam = (t: TeamRow): Team => ({ id: t.id, name: t.name, role: t.role, createdAt: Date.parse(t.created_at ?? '') || 0 });
+const toMyInvite = (i: any): MyInvite => ({
+  id: i.id,
+  teamId: i.team_id,
+  teamName: i.team_name,
+  role: i.role,
+  invitedBy: i.invited_by?.name ?? i.invited_by?.email ?? null,
+  createdAt: Date.parse(i.created_at) || 0,
+  expiresAt: Date.parse(i.expires_at) || 0,
+});
+/** Invitations addressed to the signed-in user (read when the page loads; none on a server without teams). */
+async function myInvites(): Promise<MyInvite[]> {
+  try {
+    return ((await request('GET', '/v1/invites')).invites as any[]).map(toMyInvite);
+  } catch (err) {
+    if ((err as { status?: number }).status === 404) return [];
+    throw err;
+  }
+}
 const noTeams = () => Promise.reject(new Error('I team si gestiscono solo nell’app desktop'));
 
 export function createWebBridge(): LoreBridge {
@@ -190,12 +208,17 @@ export function createWebBridge(): LoreBridge {
       const segs = f.path.split('/');
       dirAt(segs.slice(0, -1)).set(segs[segs.length - 1], { file: f });
     }
-    const toNodes = (level: Level): TreeNode[] => {
+    const toNodes = (level: Level, top = false): TreeNode[] => {
       const out: TreeNode[] = [];
       for (const [name, entry] of level) {
         if (entry.dir) {
           const children = toNodes(entry.dir);
-          out.push({ kind: 'folder', name, path: entry.rel!, mtime: Math.max(0, ...children.map((c) => c.mtime)), size: 0, children });
+          const node: TreeNode = { kind: 'folder', name, path: entry.rel!, mtime: Math.max(0, ...children.map((c) => c.mtime)), size: 0, children };
+          if (top) {
+            node.project = projectMeta(name, children);
+            node.name = node.project.name;
+          }
+          out.push(node);
         } else if (!isMd(name)) {
           const f = entry.file!;
           out.push({ kind: 'file', type: 'attachment', mime: mimeOf(f.path), name, path: f.path, mtime: Date.parse(f.uploaded), size: f.size, author: 'you' });
@@ -209,7 +232,25 @@ export function createWebBridge(): LoreBridge {
       out.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'it', { sensitivity: 'base' }));
       return out;
     };
-    return toNodes(root);
+    return toNodes(root, true);
+  }
+
+  /** What a project card shows: the team of a `Name@<teamId>` project and the user's role on it. */
+  function projectMeta(key: string, children: TreeNode[]): ProjectMeta {
+    const { name, teamId } = parseKey(key);
+    const team = teamId ? mirror.teams.find((t) => t.id === teamId) : undefined;
+    const count = (nodes: TreeNode[]): number => nodes.reduce((n, c) => n + (c.kind === 'file' ? 1 : count(c.children)), 0);
+    const checklist = children.find((c) => c.kind === 'file' && c.name.toLowerCase() === 'checklist.md');
+    return {
+      key,
+      name,
+      loaded: true,
+      team: teamId ? { id: teamId, name: team?.name ?? name } : null,
+      access: teamId ? (team?.role ?? 'viewer') : 'owner',
+      fileCount: count(children),
+      updatedAt: Math.max(0, ...children.map((c) => c.mtime)),
+      checklist: checklist && checklist.kind === 'file' && checklist.total !== undefined ? { done: checklist.done ?? 0, total: checklist.total } : null,
+    };
   }
 
   function fileMeta(name: string, content = '') {
@@ -264,9 +305,11 @@ export function createWebBridge(): LoreBridge {
     if (polling || !primed || !auth.user() || document.hidden) return;
     polling = true;
     try {
-      const { version } = await request('GET', '/v1/version');
-      if (version === state.lastVersion) return;
-      state.lastVersion = version;
+      // One request: the cursors of the user's own space and of each team.
+      const { version, scopes = {} } = await request('GET', '/v1/version');
+      const stamp = JSON.stringify([version, Object.entries(scopes as Record<string, any>).map(([k, v]) => [k, v?.version ?? v]).sort()]);
+      if (stamp === state.lastVersion) return;
+      state.lastVersion = stamp;
       const { items } = await request('GET', '/v1/audit', { query: { limit: 50 } });
       const prev = state.lastLogId;
       if ((items[0]?.log_id ?? 0) !== prev) {
@@ -277,7 +320,7 @@ export function createWebBridge(): LoreBridge {
       const agentPaths = new Set<string>(items.filter((r: any) => r.log_id > prev).map((r: any) => r.target_path));
       const changes = await resync({ agentPaths });
       const notes = changes.filter((c) => !isIndex(c.rel));
-      if (changes.length) changed.emit({ paths: changes.map((c) => c.rel), external: notes.length > 0, source: notes.some((c) => agentPaths.has(c.rel)) ? 'agent' : 'device' });
+      if (changes.length) changed.emit({ paths: changes.map((c) => c.rel), external: notes.length > 0, source: notes.some((c) => !teamOf(c.rel) && agentPaths.has(c.rel)) ? 'agent' : notes.some((c) => teamOf(c.rel)) ? 'teammate' : 'device' });
     } catch {
       /* offline or session gone: try again next tick */
     } finally {
@@ -310,16 +353,17 @@ export function createWebBridge(): LoreBridge {
     return results.slice(0, 60);
   }
 
-  /** Server search (personal space); the local one answers when the server cannot. */
+  /** Server search, once per space (personal + each team); the local one answers when no space does. */
   async function serverSearch(query: string) {
     const q = query.trim();
     if (!q) return [];
-    try {
-      let res = await request('GET', '/v1/search', { query: { q: q.slice(0, 200), limit: 50 } });
-      for (let i = 0; res.truncated && i < 6; i++) res = await request('GET', '/v1/search', { query: { q: q.slice(0, 200), limit: 50 } });
-      const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-      return (res.hits as any[]).slice(0, 60).map((h) => ({
-        path: h.path as string,
+    const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const ask = async (teamId: string | null) => {
+      const params = { q: q.slice(0, 200), limit: 50, owner: ownerOf(teamId) };
+      let res = await request('GET', '/v1/search', { query: params });
+      for (let i = 0; res.truncated && i < 6; i++) res = await request('GET', '/v1/search', { query: params });
+      return (res.hits as any[]).map((h) => ({
+        path: fromWire(teamId, h.path as string),
         nameHit: !!h.pathMatch,
         hits: (h.snippets as any[]).map((s) => {
           const lower = String(s.text).toLowerCase();
@@ -328,9 +372,10 @@ export function createWebBridge(): LoreBridge {
         }),
         total: Math.max(1, h.snippets.length),
       }));
-    } catch {
-      return search(query);
-    }
+    };
+    const answers = await Promise.all([null, ...mirror.teams.map((t) => t.id)].map((id) => ask(id).catch(() => null)));
+    if (answers.every((a) => a === null)) return search(query);
+    return answers.flatMap((a) => a ?? []).slice(0, 60);
   }
 
   const LINK_RE = /!?\[\[([^\]\n]+)\]\]|\]\(\s*<([^>\n]+)>\s*\)|\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g;
@@ -638,8 +683,8 @@ export function createWebBridge(): LoreBridge {
       };
     },
 
-    // Teams are managed from the desktop app; the browser sees none.
-    teams: async () => [],
+    // Teams are managed from the desktop app; the browser lists them (and their projects) and answers invitations.
+    teams: async () => (await mirror.listTeams()).map(toTeam),
     team: noTeams,
     createTeam: noTeams,
     renameTeam: noTeams,
@@ -650,8 +695,16 @@ export function createWebBridge(): LoreBridge {
     teamInvites: noTeams,
     inviteToTeam: noTeams,
     revokeInvite: noTeams,
-    myInvites: async () => [],
-    answerInvite: noTeams,
+    myInvites,
+    async answerInvite(id, accept) {
+      await request('POST', `/v1/invites/${encodeURIComponent(id)}/${accept ? 'accept' : 'decline'}`);
+      // Accepting brings the team's projects in right away.
+      if (accept) {
+        await resync();
+        changed.emit({ paths: [], external: false });
+      }
+      return myInvites();
+    },
     moveToTeam: noTeams,
     vaultProjects: async () => [],
     vaultSetProject: noVault,
@@ -661,8 +714,6 @@ export function createWebBridge(): LoreBridge {
     vaultStatus: async () => VAULT_OFF,
     vaultChooseRoot: async () => null,
     vaultPreview: noVault,
-    vaultEnable: noVault,
-    vaultDisable: async () => VAULT_OFF,
     vaultSyncNow: async () => VAULT_OFF,
     vaultConfirm: async () => VAULT_OFF,
     vaultReveal: async () => false,

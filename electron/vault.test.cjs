@@ -534,3 +534,106 @@ test('read-only projects: files are read-only, local edits are reverted, new fil
   assert.equal(disk('V (Squadra)/a.md'), 'a\n');
   assert.ok(mirror.store.has('V@T1/a.md'));
 });
+
+test('flat vault: the folder is the project, files sit at its root, other projects stay out', async (t) => {
+  const layout = { flat: 'P', folderOf: (k) => k, keyOf: (f) => f, covers: (k) => k === layout.flat, readonly: () => false, folders: () => new Map() };
+  const { root, engine, mirror, write, pass, disk, trashed } = await setup(t, { 'P/a.md': 'a\n', 'P/sub/b.md': 'b\n', 'P/index.md': '# P\n', 'Q/c.md': 'c\n' }, { layout });
+  await engine.start();
+  assert.equal(disk('a.md'), 'a\n');
+  assert.equal(disk('sub/b.md'), 'b\n');
+  assert.ok(!fs.existsSync(path.join(root, 'P')), 'no project folder inside the vault');
+  assert.ok(!fs.existsSync(path.join(root, 'Q')) && !fs.existsSync(path.join(root, 'c.md')), 'other projects are not downloaded');
+  assert.equal(fs.statSync(path.join(root, 'index.md')).mode & 0o222, 0);
+  assert.deepEqual(mirror.calls, []);
+
+  // Files at the vault root are the project's files, not "outside a project".
+  await write('a.md', 'a\nmore\n');
+  await write('new.md', 'n\n');
+  await write('sub/deep/c.md', 'd\n');
+  await pass();
+  assert.equal(mirror.store.get('P/a.md').data.toString(), 'a\nmore\n');
+  assert.equal(mirror.store.get('P/new.md').data.toString(), 'n\n');
+  assert.equal(mirror.store.get('P/sub/deep/c.md').data.toString(), 'd\n');
+  assert.ok(!engine.status().unsynced.length);
+
+  // Cloud edits and deletes land in the same place.
+  mirror.remoteWrite('P/sub/b.md', 'b2\n');
+  await mirror.remove('P/new.md');
+  await pass();
+  assert.equal(disk('sub/b.md'), 'b2\n');
+  assert.ok(!fs.existsSync(path.join(root, 'new.md')));
+  assert.deepEqual(trashed, ['new.md']);
+
+  // A paths helper: abs() of the project is the vault folder itself.
+  assert.equal(engine.abs('P'), root);
+  assert.equal(engine.abs('P/sub/b.md'), path.join(root, 'sub', 'b.md'));
+
+  // The project renamed or moved to a team: same folder, new key, nothing re-uploaded.
+  await mirror.move('P', 'R');
+  mirror.calls.length = 0;
+  await engine.rekeyProject('P', 'R');
+  await pass();
+  assert.equal(disk('sub/b.md'), 'b2\n');
+  assert.deepEqual(mirror.calls, []);
+  assert.ok(Object.keys(engine.manifest.files).every((k) => k.startsWith('R/')));
+  assert.equal(engine.abs('R/x.md'), path.join(root, 'x.md'));
+});
+
+test('flat vault: a project moved into a team elsewhere, while the app was closed, keeps its folder and local work', async (t) => {
+  const { rekeyManifestFile } = require('./vaults.cjs');
+  const layout = { flat: 'P', folderOf: (k) => k, keyOf: (f) => f, covers: (k) => k === layout.flat, readonly: () => false, folders: () => new Map() };
+  const files = { 'P/a.md': 'a\n', 'P/06. Soluzioni.md': 'vecchia\n', 'P/Pasted image 1.png': '\x89PNG1' };
+  const { dir, root, mirror, engine, write, disk, trashed, make } = await setup(t, files, { layout });
+  await engine.start();
+  await write('.obsidian/app.json', '{"theme":"x"}');
+  engine.stop();
+  await engine.queue;
+
+  // App closed: the note is renamed and extended in Obsidian, the image moved into Asset/...
+  await fsp.rm(path.join(root, '06. Soluzioni.md'));
+  await write('6. Soluzioni.md', 'vecchia\nnuova parte\n');
+  await fsp.mkdir(path.join(root, 'Asset'));
+  await fsp.rename(path.join(root, 'Pasted image 1.png'), path.join(root, 'Asset', 'img.png'));
+  // ...and the project is moved into a team from another device (the server keeps the etags).
+  await mirror.move('P', 'P@T1');
+
+  // Next start: the folder is relinked to the team key, its saved manifest too.
+  assert.equal(await rekeyManifestFile(path.join(dir, 'state', 'manifest.json'), 'P', 'P@T1'), true);
+  layout.flat = 'P@T1';
+  const again = make();
+  t.after(async () => {
+    again.stop();
+    await again.queue;
+  });
+  mirror.calls.length = 0;
+  await again.start();
+
+  assert.ok(!fs.existsSync(path.join(root, '06. Soluzioni.md')), 'the old name does not come back');
+  assert.ok(!fs.existsSync(path.join(root, 'Pasted image 1.png')), 'the moved image does not come back');
+  assert.equal(disk('6. Soluzioni.md'), 'vecchia\nnuova parte\n');
+  assert.equal(disk('.obsidian/app.json'), '{"theme":"x"}');
+  assert.deepEqual(trashed, []);
+  assert.equal(mirror.store.get('P@T1/6. Soluzioni.md').data.toString(), 'vecchia\nnuova parte\n');
+  assert.ok(!mirror.store.has('P@T1/06. Soluzioni.md'));
+  assert.equal(mirror.store.get('P@T1/Asset/img.png').data.toString(), '\x89PNG1');
+  assert.ok(![...mirror.store.keys()].some((k) => k.startsWith('P/')), 'no personal project recreated');
+  assert.ok(Object.keys(again.manifest.files).every((k) => k.startsWith('P@T1/')));
+});
+
+test('flat vault: without the manifest rekey, renamed files would come back (why rekeyManifestFile exists)', async (t) => {
+  const layout = { flat: 'P', folderOf: (k) => k, keyOf: (f) => f, covers: (k) => k === layout.flat, readonly: () => false, folders: () => new Map() };
+  const { root, mirror, engine, make } = await setup(t, { 'P/a.md': 'a\n', 'P/old.md': 'o\n' }, { layout });
+  await engine.start();
+  engine.stop();
+  await engine.queue;
+  await fsp.rename(path.join(root, 'old.md'), path.join(root, 'new.md'));
+  await mirror.move('P', 'P@T1');
+  layout.flat = 'P@T1';
+  const again = make();
+  t.after(async () => {
+    again.stop();
+    await again.queue;
+  });
+  await again.start();
+  assert.ok(fs.existsSync(path.join(root, 'old.md')), 'the stale manifest does not know old.md was renamed');
+});

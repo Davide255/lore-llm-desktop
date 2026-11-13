@@ -27,7 +27,15 @@ async function pool<T>(items: T[], size: number, fn: (item: T) => Promise<void>)
   );
 }
 
+export interface TeamRow {
+  id: string;
+  name: string;
+  role: 'owner' | 'editor' | 'viewer';
+  created_at?: string;
+}
+
 export function createMirror() {
+  let teams: TeamRow[] = [];
   const cache = new Map<string, { etag: string; content: string }>();
   let files = new Map<string, Meta>();
   let attachments = new Map<string, Meta>();
@@ -47,6 +55,7 @@ export function createMirror() {
     },
 
     reset() {
+      teams = [];
       cache.clear();
       files = new Map();
       attachments = new Map();
@@ -66,9 +75,40 @@ export function createMirror() {
       return f;
     },
 
-    /** Re-list the space and pull changed note contents; returns what changed. */
+    /** Teams the user belongs to, as of the last sync. */
+    get teams() {
+      return teams;
+    },
+
+    /** The user's teams (none on a server without teams). */
+    async listTeams(): Promise<TeamRow[]> {
+      try {
+        return (await request<{ teams: TeamRow[] }>('GET', '/v1/teams')).teams;
+      } catch (err) {
+        if ((err as { status?: number }).status === 404) return [];
+        throw err;
+      }
+    },
+
+    /**
+     * Re-list every space (the user's own, then each team's with `?owner=t:<id>`) and pull
+     * changed note contents; returns what changed. Team paths come back as `Name@<teamId>/…`.
+     */
     async sync(): Promise<Change[]> {
-      const { files: list } = await request<{ files: Meta[] }>('GET', '/v1/files', { query: { attachments: 1 } });
+      teams = await mirror.listTeams();
+      const lists = await Promise.all(
+        [null, ...teams].map(async (team) => {
+          try {
+            return (await request<{ files: Meta[] }>('GET', '/v1/files', { query: { attachments: 1, ...(team ? { owner: `t:${team.id}` } : {}) } })).files;
+          } catch (err) {
+            // A team just left (or deleted): its projects quietly go away.
+            const status = (err as { status?: number }).status;
+            if (team && (status === 403 || status === 404)) return [];
+            throw err;
+          }
+        }),
+      );
+      const list = lists.flat();
       const notes = list.filter((f) => isMd(f.path));
       const next = new Map(notes.map((f) => [f.path, f]));
       const nextAtt = new Map(list.filter((f) => !isMd(f.path)).map((f) => [f.path, f]));

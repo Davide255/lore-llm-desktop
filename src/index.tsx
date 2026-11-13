@@ -1,4 +1,5 @@
 import { AppRegistry } from 'react-native';
+import '@fontsource-variable/inter';
 import 'material-symbols/rounded.css';
 import './global.css';
 import App from './App';

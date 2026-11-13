@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { supported, normalize, isActive, startsHidden, loginItemSettings, closeAction } = require('./background.cjs');
+const { supported, normalize, isActive, startsHidden, loginItemSettings, closeAction, trayState } = require('./background.cjs');
 
 const on = { platform: 'darwin', settings: { openAtLogin: false, background: true }, vaultEnabled: true, signedIn: true };
 
@@ -47,4 +47,15 @@ test('quitting closes a hidden window without asking', () => {
   assert.equal(closeAction({ allowClose: false, active: true, quitting: true, visible: false }), 'close');
   assert.equal(closeAction({ allowClose: false, active: true, quitting: true, visible: true }), 'ask');
   assert.equal(closeAction({ allowClose: true, active: true, quitting: true, visible: true }), 'close');
+});
+
+test('tray: shown on Windows and macOS only, sync entry and tooltip follow the runner', () => {
+  assert.equal(trayState({ platform: 'win32', active: false }).show, true);
+  assert.equal(trayState({ platform: 'darwin', active: false }).show, true);
+  assert.equal(trayState({ platform: 'linux', active: true }).show, false);
+  const idle = trayState({ platform: 'win32', active: false });
+  const on = trayState({ platform: 'win32', active: true });
+  assert.equal(idle.syncItem, false);
+  assert.equal(on.syncItem, true);
+  assert.notEqual(idle.tooltip, on.tooltip);
 });

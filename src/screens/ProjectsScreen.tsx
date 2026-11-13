@@ -53,11 +53,11 @@ export function ProjectsScreen() {
           <View style={{ flex: 1 }}>
             <Text style={t(500, 14, 1.3)}>Usi Obsidian?</Text>
             <Text style={t(400, 12.5, 1.45, { color: c.ink2, marginTop: 3 })}>
-              Tieni una copia della knowledge base in una cartella e modificala in Obsidian: si sincronizza da sola con il cloud e con gli agenti.
+              Dai a un progetto una cartella e modificalo in Obsidian: ogni progetto ha la sua cartella e si sincronizza da solo con il cloud e con gli agenti.
             </Text>
           </View>
           <Btn label="Non ora" onPress={() => app.setPrefs({ obsidianBannerDismissed: true })} />
-          <Btn variant="primary" label="Configura" onPress={() => app.openDialog({ kind: 'vaultSetup' })} />
+          <Btn variant="primary" label="Configura" onPress={() => app.navigate({ name: 'settings', section: 'obsidian' })} />
         </View>
       ) : null}
 

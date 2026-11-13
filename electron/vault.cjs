@@ -59,6 +59,8 @@ const projectName = (key) => key.replace(/@[A-Za-z0-9-]{1,64}$/, '');
  *   covers(key)     the project syncs now (selected, and its files are mirrored)
  *   readonly(key)   the user can only read it (a team where they are a viewer)
  *   folders()       Map(key -> folder) of the covered projects, to notice a renamed team
+ *   flat            (optional) key of the one project this vault holds: its files sit directly
+ *                   in the vault folder, with no project folder in between (a vault per project)
  */
 const PLAIN_LAYOUT = {
   folderOf: (key) => key,
@@ -144,10 +146,12 @@ async function scanVault(root, prev = {}, layout = PLAIN_LAYOUT) {
   const files = new Map();
   const dirs = new Set();
   const unsynced = [];
-  const toCloud = (local) => swapProject(local, (folder) => {
-    const key = layout.keyOf(folder);
-    return key != null && layout.covers(key) ? key : null;
-  });
+  const toCloud = layout.flat != null
+    ? (local) => (layout.covers(layout.flat) ? `${layout.flat}/${local}` : null)
+    : (local) => swapProject(local, (folder) => {
+        const key = layout.keyOf(folder);
+        return key != null && layout.covers(key) ? key : null;
+      });
   async function walk(absDir, relDir) {
     let entries;
     try {
@@ -467,7 +471,8 @@ class VaultSync {
   /** Where a cloud path (a project, a folder or a file) sits on disk. */
   abs(rel) {
     const abs = path.resolve(this.root, ...shownPath(rel, this.layout).split('/'));
-    if (!abs.startsWith(this.root + path.sep)) throw new Error('Percorso non valido');
+    // A flat vault's project is the root itself.
+    if (!abs.startsWith(this.root + path.sep) && !(this.layout.flat != null && abs === this.root)) throw new Error('Percorso non valido');
     return abs;
   }
 
@@ -480,6 +485,20 @@ class VaultSync {
     return this.enqueue(async () => {
       for (const k of Object.keys(this.manifest.files)) if (projectOf(k) === key) delete this.manifest.files[k];
       delete this.manifest.folders?.[key];
+      await this.saveManifest();
+    });
+  }
+
+  /** A flat vault's project was renamed or moved to a team: same folder, new key. */
+  rekeyProject(from, to) {
+    if (this.layout.flat !== from) return Promise.resolve();
+    this.layout.flat = to;
+    return this.enqueue(async () => {
+      for (const k of Object.keys(this.manifest.files)) {
+        if (!under(k, from)) continue;
+        this.manifest.files[to + k.slice(from.length)] = this.manifest.files[k];
+        delete this.manifest.files[k];
+      }
       await this.saveManifest();
     });
   }
@@ -690,7 +709,7 @@ class VaultSync {
 
   /** Remove folders emptied by a sync (never the vault root). */
   async pruneDirs(rel) {
-    while (rel) {
+    while (rel && rel !== this.layout.flat) { // a flat vault's folder is the project itself, never pruned
       try {
         await fsp.rmdir(this.abs(rel));
       } catch {
@@ -780,7 +799,8 @@ class VaultSync {
 
     // Empty folders on disk are Lore's local folders (object storage has none).
     const withFiles = new Set();
-    for (const rel of [...scan.files.keys(), ...scan.unsynced.map((u) => u.path)]) for (let p = parentOf(rel); p; p = parentOf(p)) withFiles.add(p);
+    const cloudOfLocal = (p) => (this.layout.flat != null ? `${this.layout.flat}/${p}` : p);
+    for (const rel of [...scan.files.keys(), ...scan.unsynced.map((u) => cloudOfLocal(u.path))]) for (let p = parentOf(rel); p; p = parentOf(p)) withFiles.add(p);
     // `covered`: the empty folders of other projects are not this vault's to report.
     this.emit({ type: 'folders', dirs: [...scan.dirs].filter((d) => !withFiles.has(d) && isDirSync(this.abs(d))), covered: (rel) => this.covered(`${rel}/x`) });
 
@@ -973,7 +993,14 @@ class VaultSync {
 }
 
 /** A cloud path as it sits in the vault (projects are folders; a bare key is the project's folder). */
-const shownPath = (rel, layout) => (rel.includes('/') ? swapProject(rel, layout.folderOf) : layout.folderOf(rel));
+function shownPath(rel, layout) {
+  if (layout.flat != null) {
+    // The project is the vault folder: its files sit at the root.
+    if (rel === layout.flat) return '';
+    return rel.startsWith(`${layout.flat}/`) ? rel.slice(layout.flat.length + 1) : rel;
+  }
+  return rel.includes('/') ? swapProject(rel, layout.folderOf) : layout.folderOf(rel);
+}
 
 async function exists(p) {
   try {
@@ -992,4 +1019,4 @@ function isDirSync(abs) {
   }
 }
 
-module.exports = { VaultSync, classify, scanVault, planSync, folderNames, conflictName, kindOf, isIndexRel, REASONS, PLAIN_LAYOUT };
+module.exports = { VaultSync, shownPath, classify, scanVault, planSync, folderNames, conflictName, kindOf, isIndexRel, REASONS, PLAIN_LAYOUT };
