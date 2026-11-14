@@ -23,7 +23,6 @@ const { merge3 } = require('./merge.cjs');
 // The Worker's rules (lore-llm/src/storage/paths.ts, store.ts), checked early.
 const ATTACHMENT_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf']);
 const MAX_NOTE = 1024 * 1024;
-const MAX_ATTACHMENT = 10 * 1024 * 1024;
 const MAX_PATH = 512;
 const MAX_SEGMENT = 128;
 const PROJECT_RE = /^[\p{L}\p{N}][\p{L}\p{N} _.\-]{0,63}$/u;
@@ -105,7 +104,7 @@ function folderNames(projects) {
 const REASONS = {
   root: 'Fuori da un progetto: spostalo in una cartella',
   type: 'Tipo di file non sincronizzato (solo note .md e immagini/PDF)',
-  size: 'File troppo grande (max 1 MB per le note, 10 MB per gli allegati)',
+  size: 'Nota troppo grande (max 1 MB)',
   name: 'Nome troppo lungo',
   project: 'Nome del progetto non valido',
   case: 'Esiste già un file con lo stesso nome (maiuscole/minuscole diverse)',
@@ -126,7 +125,7 @@ function classify(rel, size = 0, readonlyProject = () => false) {
   if (segs.length < 2) return { status: 'unsynced', reason: REASONS.root };
   if (!PROJECT_RE.test(projectName(segs[0]))) return { status: 'unsynced', reason: REASONS.project };
   if (rel.length > MAX_PATH || segs.some((s) => s.length > MAX_SEGMENT)) return { status: 'unsynced', reason: REASONS.name };
-  if (size > (kind === 'md' ? MAX_NOTE : MAX_ATTACHMENT)) return { status: 'unsynced', reason: REASONS.size };
+  if (kind === 'md' && size > MAX_NOTE) return { status: 'unsynced', reason: REASONS.size };
   if (isIndexRel(rel) || readonlyProject(segs[0])) return { status: 'readonly' };
   return { status: 'sync' };
 }

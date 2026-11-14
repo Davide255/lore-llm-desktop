@@ -1,10 +1,9 @@
 // Uploading files from the app: which ones the server takes and under what name.
-// The Worker accepts attachments of these types up to 10 MB (vault.cjs holds the same limits).
+// The Worker accepts attachments of these types at any size; notes are capped at 1 MB (vault.cjs holds the same limits).
 
 const path = require('node:path');
 
 const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf' };
-const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_NOTE_BYTES = 1024 * 1024;
 const MAX_PATH = 512;
 const MAX_SEGMENT = 128;
@@ -56,7 +55,7 @@ function planUpload(dir, files, exists) {
     if (!clean || dot < 1 || folders.some((s) => !s)) return skipped.push({ name: shown, reason: 'Nome non valido' });
     if (ext !== 'md' && !MIME[ext]) return skipped.push({ name: shown, reason: 'Tipo non supportato (ammessi: immagini PNG, JPG, GIF, WebP, SVG, PDF e note .md)' });
     if (!(f.size > 0)) return skipped.push({ name: shown, reason: 'File vuoto' });
-    if (f.size > (ext === 'md' ? MAX_NOTE_BYTES : MAX_BYTES)) return skipped.push({ name: shown, reason: ext === 'md' ? 'Più grande di 1 MB' : 'Più grande di 10 MB' });
+    if (ext === 'md' && f.size > MAX_NOTE_BYTES) return skipped.push({ name: shown, reason: 'Più grande di 1 MB' });
     if (ok.length >= MAX_FILES) return skipped.push({ name: shown, reason: `Oltre il limite di ${MAX_FILES} file per caricamento` });
     const parent = [dir, ...folders].join('/');
     const name = uniqueName(parent, clean, isTaken);
@@ -91,4 +90,4 @@ async function walkFolder(root, fsp) {
   return items;
 }
 
-module.exports = { walkFolder, MIME, MAX_BYTES, MAX_FILES, PICKER_EXTENSIONS, extOf, cleanName, uniqueName, planUpload };
+module.exports = { walkFolder, MIME, MAX_FILES, PICKER_EXTENSIONS, extOf, cleanName, uniqueName, planUpload };

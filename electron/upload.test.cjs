@@ -19,11 +19,16 @@ test('refuses types the server does not store, empty and oversized files', () =>
     { name: 'clip.mp4', size: 10 },
     { name: 'noext', size: 10 },
     { name: 'empty.png', size: 0 },
-    { name: 'big.pdf', size: 10 * 1024 * 1024 + 1 },
     { name: 'long.md', size: 1024 * 1024 + 1 },
   ], none);
   assert.equal(ok.length, 0);
-  assert.deepEqual(skipped.map((s) => s.name), ['clip.mp4', 'noext', 'empty.png', 'big.pdf', 'long.md']);
+  assert.deepEqual(skipped.map((s) => s.name), ['clip.mp4', 'noext', 'empty.png', 'long.md']);
+});
+
+test('attachments have no size limit', () => {
+  const { ok, skipped } = planUpload('P', [{ name: 'huge.pdf', size: 500 * 1024 * 1024 }], none);
+  assert.deepEqual(ok.map((o) => o.rel), ['P/huge.pdf']);
+  assert.equal(skipped.length, 0);
 });
 
 test('a taken name gets a numeric suffix, also within one batch', () => {

@@ -67,7 +67,7 @@ Build on the OS you target. Live updates of the renderer without a new installer
   renamed and deleted inline (with undo). `Modifica` opens the raw file.
 - Every other `.md` file and folder can be created, edited, renamed, moved, duplicated and deleted.
   Deleting is undoable for 10 s (⌘Z / toast).
-- Images and PDFs (`png jpg gif webp svg pdf`, ≤ 10 MB) can sit next to notes as **attachments**: they render
+- Images and PDFs (`png jpg gif webp svg pdf`) can sit next to notes as **attachments**: they render
   inline (`![](img/a.png)`, `![[a.png|300]]`) and open in their own view. Agents see them listed, not their bytes.
 - Links: markdown links (relative or KB-root relative), bare `name.md` mentions and Obsidian `[[wikilinks]]`
   (`[[Note#Heading|alias]]`). *Citato da* lists the notes that link to a file.

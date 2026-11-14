@@ -501,7 +501,7 @@ export function createWebBridge(): LoreBridge {
         else if (dot < 1 || folders.some((p) => !p)) skipped.push({ name: shown, reason: 'Nome non valido' });
         else if (ext !== 'md' && !MIME[ext]) skipped.push({ name: shown, reason: 'Tipo non supportato (ammessi: immagini PNG, JPG, GIF, WebP, SVG, PDF e note .md)' });
         else if (!f.data.byteLength) skipped.push({ name: shown, reason: 'File vuoto' });
-        else if (f.data.byteLength > (ext === 'md' ? 1024 * 1024 : 10 * 1024 * 1024)) skipped.push({ name: shown, reason: ext === 'md' ? 'Più grande di 1 MB' : 'Più grande di 10 MB' });
+        else if (ext === 'md' && f.data.byteLength > 1024 * 1024) skipped.push({ name: shown, reason: 'Più grande di 1 MB' });
         else if (todo.length >= 500) skipped.push({ name: shown, reason: 'Oltre il limite di 500 file per caricamento' });
         else {
           const parent = [dir, ...folders].join('/');

@@ -4,7 +4,6 @@
 import type { UploadFile } from './types';
 
 const TYPES = new Set(['md', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf']);
-const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_NOTE_BYTES = 1024 * 1024;
 /** A tree bigger than this is cut short; the upload itself takes at most 500 of it. */
 const MAX_WALK = 5000;
@@ -17,7 +16,7 @@ async function take(file: File, dir?: string): Promise<UploadFile | null> {
   const ext = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.') + 1).toLowerCase() : '';
   let skip: string | undefined;
   if (!TYPES.has(ext)) skip = 'Tipo non supportato (ammessi: immagini PNG, JPG, GIF, WebP, SVG, PDF e note .md)';
-  else if (file.size > (ext === 'md' ? MAX_NOTE_BYTES : MAX_BYTES)) skip = ext === 'md' ? 'Più grande di 1 MB' : 'Più grande di 10 MB';
+  else if (ext === 'md' && file.size > MAX_NOTE_BYTES) skip = 'Più grande di 1 MB';
   return { name: file.name, dir, skip, data: skip ? new ArrayBuffer(0) : await file.arrayBuffer() };
 }
 
