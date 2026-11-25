@@ -44,7 +44,7 @@ export function fileKind(p: string): FileKind {
   const n = basename(p).toLowerCase();
   if (n === 'index.md') return 'index';
   if (n === 'checklist.md') return 'checklist';
-  if (/\.(png|jpe?g|gif|webp|svg|pdf)$/.test(n)) return 'attachment';
+  if (/\.(png|jpe?g|gif|webp|svg|pdf|docx|xlsx|pptx)$/.test(n)) return 'attachment';
   return 'doc';
 }
 

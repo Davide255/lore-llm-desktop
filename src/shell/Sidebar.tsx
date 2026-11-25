@@ -4,6 +4,7 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { editNode, openItemMenu, openRoute } from '../state/actions';
 import { countFiles, fileKind, projectIcon, projects, relTime, rootFiles } from '../kb/paths';
+import { attachmentIcon } from '../kb/links';
 import type { TreeNode } from '../kb/types';
 import { Avatar, eventPoint, Hover, Icon, Kbd, Pill, Spinner } from '../ui/primitives';
 import { AgentAvatar, TeamPill } from '../ui/identity';
@@ -108,7 +109,7 @@ function TreeRow({ node, depth }: { node: TreeNode; depth: number }) {
   } else if (isFolder) icon = <Icon name="folder" filled size={16} color={c.blueTint} />;
   else if (kind === 'index') icon = <Icon name="auto_awesome" size={16} color={c.info} />;
   else if (kind === 'checklist') icon = <Icon name="checklist" size={16} color={c.purpleTint} />;
-  else if (kind === 'attachment') icon = <Icon name={/\.pdf$/i.test(node.path) ? 'picture_as_pdf' : 'image'} size={16} color={c.blueTint} />;
+  else if (kind === 'attachment') icon = <Icon name={attachmentIcon(node.path)} size={16} color={c.blueTint} />;
   else icon = <Icon name="description" size={16} color={c.ink3} />;
 
   const unloaded = isProject && node.kind === 'folder' && !!node.project && !node.project.loaded;

@@ -7,6 +7,7 @@ import * as auth from './auth';
 import { request } from './api';
 import { API_URL } from './config';
 import { readPickedFolder } from '../kb/dropped';
+import { isOffice } from '../kb/links';
 import { createMirror, isMd, type Meta, type TeamRow } from './mirror';
 import { fromWire, ownerOf, parseKey, teamOf } from './spaces';
 
@@ -17,7 +18,18 @@ const AUDIT_WINDOW = 200;
 const MAX_ACTIVITY = 150;
 
 const KINDS: AgentKind[] = ['claude', 'codex'];
-const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf' };
+const MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
 const mimeOf = (rel: string) => MIME[rel.slice(rel.lastIndexOf('.') + 1).toLowerCase()];
 const isIndex = (rel: string) => rel.split('/').length === 2 && rel.toLowerCase().endsWith('/index.md');
 const under = (rel: string, prefix: string) => rel === prefix || rel.startsWith(prefix + '/');
@@ -499,7 +511,7 @@ export function createWebBridge(): LoreBridge {
         const ext = dot > 0 ? clean.slice(dot + 1).toLowerCase() : '';
         if (f.skip) skipped.push({ name: shown, reason: f.skip });
         else if (dot < 1 || folders.some((p) => !p)) skipped.push({ name: shown, reason: 'Nome non valido' });
-        else if (ext !== 'md' && !MIME[ext]) skipped.push({ name: shown, reason: 'Tipo non supportato (ammessi: immagini PNG, JPG, GIF, WebP, SVG, PDF e note .md)' });
+        else if (ext !== 'md' && !MIME[ext]) skipped.push({ name: shown, reason: 'Tipo non supportato (ammessi: note .md, immagini PNG, JPG, GIF, WebP, SVG, PDF e file Office DOCX, XLSX, PPTX)' });
         else if (!f.data.byteLength) skipped.push({ name: shown, reason: 'File vuoto' });
         else if (f.data.byteLength > (ext === 'md' ? 1024 * 1024 : 10 * 1024 * 1024)) skipped.push({ name: shown, reason: ext === 'md' ? 'Più grande di 1 MB' : 'Più grande di 10 MB' });
         else if (todo.length >= 500) skipped.push({ name: shown, reason: 'Oltre il limite di 500 file per caricamento' });
@@ -725,6 +737,19 @@ export function createWebBridge(): LoreBridge {
     },
 
     openAttachment(rel) {
+      // A browser can't hand a file to Word or Excel: Office files are saved to the downloads, under their own name.
+      if (isOffice(rel)) {
+        return assetUrl(rel).then((url) => {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = rel.slice(rel.lastIndexOf('/') + 1);
+          a.rel = 'noopener';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          return '';
+        });
+      }
       // Opened before the download so the popup blocker sees the click.
       const tab = window.open('', '_blank');
       return assetUrl(rel).then(

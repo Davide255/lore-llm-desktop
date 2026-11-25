@@ -3,7 +3,7 @@
 
 import type { UploadFile } from './types';
 
-const TYPES = new Set(['md', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf']);
+const TYPES = new Set(['md', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf', 'docx', 'xlsx', 'pptx']);
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_NOTE_BYTES = 1024 * 1024;
 /** A tree bigger than this is cut short; the upload itself takes at most 500 of it. */
@@ -16,7 +16,7 @@ async function take(file: File, dir?: string): Promise<UploadFile | null> {
   if (dir && (hidden(file.name) || dir.split('/').some(hidden))) return null;
   const ext = file.name.includes('.') ? file.name.slice(file.name.lastIndexOf('.') + 1).toLowerCase() : '';
   let skip: string | undefined;
-  if (!TYPES.has(ext)) skip = 'Tipo non supportato (ammessi: immagini PNG, JPG, GIF, WebP, SVG, PDF e note .md)';
+  if (!TYPES.has(ext)) skip = 'Tipo non supportato (ammessi: note .md, immagini PNG, JPG, GIF, WebP, SVG, PDF e file Office DOCX, XLSX, PPTX)';
   else if (file.size > (ext === 'md' ? MAX_NOTE_BYTES : MAX_BYTES)) skip = ext === 'md' ? 'Più grande di 1 MB' : 'Più grande di 10 MB';
   return { name: file.name, dir, skip, data: skip ? new ArrayBuffer(0) : await file.arrayBuffer() };
 }

@@ -1,9 +1,21 @@
 // Uploading files from the app: which ones the server takes and under what name.
 // The Worker accepts attachments of these types up to 10 MB (vault.cjs holds the same limits).
 
+const crypto = require('node:crypto');
 const path = require('node:path');
 
-const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf' };
+const MIME = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_NOTE_BYTES = 1024 * 1024;
 const MAX_PATH = 512;
@@ -54,7 +66,7 @@ function planUpload(dir, files, exists) {
     const ext = dot > 0 ? extOf(clean) : '';
     if (f.skip) return skipped.push({ name: shown, reason: f.skip });
     if (!clean || dot < 1 || folders.some((s) => !s)) return skipped.push({ name: shown, reason: 'Nome non valido' });
-    if (ext !== 'md' && !MIME[ext]) return skipped.push({ name: shown, reason: 'Tipo non supportato (ammessi: immagini PNG, JPG, GIF, WebP, SVG, PDF e note .md)' });
+    if (ext !== 'md' && !MIME[ext]) return skipped.push({ name: shown, reason: 'Tipo non supportato (ammessi: note .md, immagini PNG, JPG, GIF, WebP, SVG, PDF e file Office DOCX, XLSX, PPTX)' });
     if (!(f.size > 0)) return skipped.push({ name: shown, reason: 'File vuoto' });
     if (f.size > (ext === 'md' ? MAX_NOTE_BYTES : MAX_BYTES)) return skipped.push({ name: shown, reason: ext === 'md' ? 'Più grande di 1 MB' : 'Più grande di 10 MB' });
     if (ok.length >= MAX_FILES) return skipped.push({ name: shown, reason: `Oltre il limite di ${MAX_FILES} file per caricamento` });
@@ -66,6 +78,30 @@ function planUpload(dir, files, exists) {
     ok.push({ index, name, rel });
   });
   return { ok, skipped };
+}
+
+// Names Windows keeps for devices: `CON.docx` can't be created there.
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
+const MAX_OPEN_NAME = 120;
+
+/**
+ * Where a downloaded attachment is written before the system app opens it: `<dir>/<hash of rel>/<name>`.
+ * The name is the attachment's own (so Word or Excel shows it in the title bar), reduced to one safe file
+ * name: no folders, no `..`, no characters Windows refuses, no device names, never longer than MAX_OPEN_NAME,
+ * and always with the attachment's extension. The folder keeps two `report.docx` in different notes apart.
+ * Only the types the server stores are opened: anything else (an `.exe` in a path) gives null.
+ */
+function openCopyPath(dir, rel) {
+  const raw = String(rel);
+  const ext = extOf(raw);
+  if (!raw.includes('.') || !Object.hasOwn(MIME, ext)) return null;
+  let stem = cleanName(raw)
+    .slice(0, -(ext.length + 1))
+    .replace(/[. ]+$/, '');
+  if (WINDOWS_RESERVED.test(stem)) stem = `_${stem}`;
+  stem = stem.slice(0, MAX_OPEN_NAME - ext.length - 1).replace(/[. ]+$/, '') || 'allegato';
+  const folder = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16);
+  return path.join(dir, folder, `${stem}.${ext}`);
 }
 
 /**
@@ -91,4 +127,4 @@ async function walkFolder(root, fsp) {
   return items;
 }
 
-module.exports = { walkFolder, MIME, MAX_BYTES, MAX_FILES, PICKER_EXTENSIONS, extOf, cleanName, uniqueName, planUpload };
+module.exports = { walkFolder, MIME, MAX_BYTES, MAX_FILES, PICKER_EXTENSIONS, extOf, cleanName, uniqueName, planUpload, openCopyPath };

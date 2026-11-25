@@ -21,7 +21,7 @@ const crypto = require('node:crypto');
 const { merge3 } = require('./merge.cjs');
 
 // The Worker's rules (lore-llm/src/storage/paths.ts, store.ts), checked early.
-const ATTACHMENT_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf']);
+const ATTACHMENT_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'pdf', 'docx', 'xlsx', 'pptx']);
 const MAX_NOTE = 1024 * 1024;
 const MAX_ATTACHMENT = 10 * 1024 * 1024;
 const MAX_PATH = 512;
@@ -104,7 +104,7 @@ function folderNames(projects) {
 
 const REASONS = {
   root: 'Fuori da un progetto: spostalo in una cartella',
-  type: 'Tipo di file non sincronizzato (solo note .md e immagini/PDF)',
+  type: 'Tipo di file non sincronizzato (solo note .md, immagini, PDF e file Office DOCX/XLSX/PPTX)',
   size: 'File troppo grande (max 1 MB per le note, 10 MB per gli allegati)',
   name: 'Nome troppo lungo',
   project: 'Nome del progetto non valido',

@@ -97,8 +97,11 @@ const isMd = (name) => name.toLowerCase().endsWith('.md');
 const isIndex = (rel) => rel.split('/').length === 2 && rel.toLowerCase().endsWith('/index.md');
 const under = (rel, prefix) => rel === prefix || rel.startsWith(prefix + '/');
 
-const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf' };
-const mimeOf = (rel) => MIME[rel.slice(rel.lastIndexOf('.') + 1).toLowerCase()];
+// The attachment types the server stores (images, PDF, Office), the same list the upload uses.
+const mimeOf = (rel) => {
+  const ext = upload.extOf(rel);
+  return Object.hasOwn(upload.MIME, ext) ? upload.MIME[ext] : undefined;
+};
 
 function checkFilePath(rel) {
   if (!rel.includes('/')) throw new Error('I file devono stare dentro un progetto');
@@ -1106,7 +1109,7 @@ handle('kb:upload', async (dir, dropped, opts) => {
     const folder = !!opts?.folder;
     const res = await dialog.showOpenDialog(win, folder
       ? { title: 'Carica cartella', properties: ['openDirectory', 'multiSelections'] }
-      : { title: 'Carica file', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Immagini, PDF e note', extensions: upload.PICKER_EXTENSIONS }] });
+      : { title: 'Carica file', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Note, immagini, PDF e file Office', extensions: upload.PICKER_EXTENSIONS }] });
     if (res.canceled) return { uploaded: [], skipped: [] };
     items = [];
     for (const p of res.filePaths) {
@@ -1646,15 +1649,24 @@ handle('obsidian:open', async (rel) => {
 
 handle('obsidian:launch', () => shell.openExternal('obsidian://open'));
 
-// Attachments that the window can't show inline (PDF) open in the system viewer.
+// Attachments that the window can't show inline (PDF, Word, Excel, PowerPoint) open in the
+// system's default app. The vault's own file when there is one (edits there sync back); else a
+// copy downloaded to the temp folder, under a name made safe by openCopyPath. Resolves to
+// shell.openPath's answer: '' when it opened, the system's error message otherwise.
 handle('app:openAttachment', async (rel) => {
+  const dir = path.join(app.getPath('temp'), 'lore-attachments');
+  const file = typeof rel === 'string' ? upload.openCopyPath(dir, rel) : null;
+  if (!file) throw new Error('Questo tipo di file non si può aprire');
   const local = vault?.running ? vault.abs(rel) : null;
   if (local && fs.existsSync(local)) return shell.openPath(local);
   const { buffer } = await mirror.readBlob(rel);
-  const dir = path.join(app.getPath('temp'), 'lore-attachments');
-  await fsp.mkdir(dir, { recursive: true });
-  const file = path.join(dir, path.basename(rel));
-  await fsp.writeFile(file, buffer);
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  try {
+    await fsp.writeFile(file, buffer);
+  } catch (err) {
+    // Still open in Word or Excel from last time (locked on Windows): open that copy again.
+    if (!['EBUSY', 'EPERM', 'EACCES'].includes(err?.code) || !fs.existsSync(file)) throw err;
+  }
   return shell.openPath(file);
 });
 
