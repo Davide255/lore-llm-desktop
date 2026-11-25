@@ -88,8 +88,8 @@ export function AttachmentScreen({ path }: { path: string }) {
               />
               <Text style={t(400, 12, 1.5, { color: c.ink3, textAlign: 'center' })}>
                 {download
-                  ? 'Aprilo con Word, Excel, PowerPoint o LibreOffice dopo il download.'
-                  : 'Si apre con Word, Excel, PowerPoint o l’app impostata nel sistema.'}
+                  ? 'Aprilo con Word, Excel, PowerPoint o LibreOffice dopo il download. Le modifiche non tornano su Lore: ricaricalo per salvarle.'
+                  : 'Si apre con Word, Excel, PowerPoint o l’app impostata nel sistema. Quando salvi, le modifiche vengono caricate su Lore da sole.'}
               </Text>
             </View>
           ) : image && !failed ? (

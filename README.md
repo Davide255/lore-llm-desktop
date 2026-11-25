@@ -71,7 +71,10 @@ Build on the OS you target. Live updates of the renderer without a new installer
   inline (`![](img/a.png)`, `![[a.png|300]]`) and open in their own view. Agents see them listed, not their bytes.
   Office files (`docx xlsx pptx`, ≤ 10 MB; not the old `doc xls ppt`) are attachments too: their view has
   *Apri con l'app predefinita*, which downloads a copy to the temp folder (or uses the Obsidian folder's file)
-  and hands it to the system (Word, Excel, PowerPoint, LibreOffice…). The browser build downloads them instead.
+  and hands it to the system (Word, Excel, PowerPoint, LibreOffice…). Each save of that copy is uploaded back
+  (`electron/edit-back.cjs`: folder watch, debounce, hash check, `If-Match` on the etag it was opened at; if the
+  attachment changed on Lore meanwhile the edit becomes a *conflitto* copy next to it). The browser build only
+  downloads them.
 - Links: markdown links (relative or KB-root relative), bare `name.md` mentions and Obsidian `[[wikilinks]]`
   (`[[Note#Heading|alias]]`). *Citato da* lists the notes that link to a file.
 
