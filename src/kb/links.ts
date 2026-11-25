@@ -12,9 +12,36 @@ export interface WikiLink {
   width?: number;
 }
 
-const ATTACHMENT_RE = /\.(png|jpe?g|gif|webp|svg|pdf)$/i;
+const ATTACHMENT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|docx|xlsx|pptx)$/i;
 export const isAttachment = (p: string) => ATTACHMENT_RE.test(p);
 export const isImage = (p: string) => /\.(png|jpe?g|gif|webp|svg)$/i.test(p);
+export const isPdf = (p: string) => /\.pdf$/i.test(p);
+
+/** Office files (only the OOXML formats the server stores): shown as a card, opened in the system app. */
+export type OfficeKind = 'word' | 'excel' | 'powerpoint';
+const OFFICE = new Map<string, OfficeKind>([
+  ['docx', 'word'],
+  ['xlsx', 'excel'],
+  ['pptx', 'powerpoint'],
+]);
+export const officeKind = (p: string): OfficeKind | null => OFFICE.get(p.slice(p.lastIndexOf('.') + 1).toLowerCase()) ?? null;
+export const isOffice = (p: string) => officeKind(p) !== null;
+
+/** Material Symbols name for an attachment. */
+export function attachmentIcon(p: string): string {
+  if (isPdf(p)) return 'picture_as_pdf';
+  const office = officeKind(p);
+  if (office) return { word: 'docs', excel: 'table', powerpoint: 'slideshow' }[office];
+  return 'image';
+}
+
+/** What the attachment is, in words. */
+export function attachmentLabel(p: string): string {
+  if (isPdf(p)) return 'PDF';
+  const office = officeKind(p);
+  if (office) return { word: 'Documento Word', excel: 'Foglio Excel', powerpoint: 'Presentazione PowerPoint' }[office];
+  return isImage(p) ? 'Immagine' : 'Allegato';
+}
 
 const basename = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 const dirname = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');

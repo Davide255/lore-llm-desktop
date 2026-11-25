@@ -3,15 +3,15 @@ import { ScrollView, Text, View } from 'react-native';
 import { c, font, radius, t } from '../theme';
 import { useApp } from '../state/app';
 import { openItemMenu } from '../state/actions';
-import { lore } from '../kb/bridge';
-import { backlinks as linksTo, isImage } from '../kb/links';
+import { isWeb, lore } from '../kb/bridge';
+import { attachmentIcon, attachmentLabel, backlinks as linksTo, isImage, officeKind } from '../kb/links';
 import { basename, filePaths, findNode, formatSize, longDate, relTime } from '../kb/paths';
 import { Btn, Hover, Icon, IconBtn, useCompact } from '../ui/primitives';
 import { anchorBelow } from '../ui/overlays';
 import { useAssetUrl } from '../ui/Markdown';
 import { EmptyState, FileBar, Rail, RailHeading, useWidth } from './common';
 
-/** An image or PDF stored in the knowledge base (usually pasted in Obsidian). */
+/** An image, PDF or Office file stored in the knowledge base (usually pasted in Obsidian or uploaded). */
 export function AttachmentScreen({ path }: { path: string }) {
   const app = useApp();
   const node = findNode(app.tree, path);
@@ -22,6 +22,8 @@ export function AttachmentScreen({ path }: { path: string }) {
   const src = useAssetUrl(path, () => setFailed(true));
   const moreRef = useRef<View>(null);
   const image = isImage(path);
+  const office = officeKind(path);
+  const [opening, setOpening] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -33,11 +35,27 @@ export function AttachmentScreen({ path }: { path: string }) {
 
   if (!node || node.kind !== 'file') return <EmptyState icon="hide_image" title="Allegato non trovato" body={path} />;
 
-  const open = () => lore.openAttachment(path).catch(() => app.toast({ icon: 'error', text: 'Impossibile aprire l’allegato' }));
+  // The system's answer when it can't open the file (no app for .xlsx, …) is shown as it is.
+  const open = () => {
+    if (opening) return;
+    setOpening(true);
+    lore
+      .openAttachment(path)
+      .then((err) => {
+        if (err) app.toast({ icon: 'error', text: `Impossibile aprire l’allegato: ${err}`, ttl: 6000 });
+      })
+      .catch((e) => {
+        const why = e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : '';
+        app.toast({ icon: 'error', text: why ? `Impossibile aprire l’allegato: ${why}` : 'Impossibile aprire l’allegato', ttl: 6000 });
+      })
+      .finally(() => setOpening(false));
+  };
+  // A browser can't hand the file to Word or Excel: it saves it instead.
+  const download = !!office && isWeb;
 
   return (
     <View style={{ flex: 1 }} onLayout={onLayout}>
-      <FileBar title={basename(path)} subtitle={`${formatSize(node.size)} · ${node.mime ?? 'allegato'} · caricato ${relTime(node.mtime)}`}>
+      <FileBar title={basename(path)} subtitle={`${formatSize(node.size)} · ${office ? attachmentLabel(path) : (node.mime ?? 'allegato')} · caricato ${relTime(node.mtime)}`}>
         <IconBtn icon="ios_share" title="Copia link" onPress={() => app.ops.copyLink(path)} />
         <View ref={moreRef}>
           <IconBtn
@@ -48,11 +66,33 @@ export function AttachmentScreen({ path }: { path: string }) {
             }}
           />
         </View>
-        <Btn variant="tint" icon="open_in_new" label="Apri" onPress={open} />
+        <Btn variant="tint" icon={download ? 'download' : 'open_in_new'} label={download ? 'Scarica' : 'Apri'} onPress={open} disabled={opening} />
       </FileBar>
       <View style={{ flex: 1, flexDirection: 'row', minHeight: 0 }}>
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: compact ? 16 : 40, alignItems: 'center' }}>
-          {image && !failed ? (
+          {office ? (
+            <View style={{ alignItems: 'center', gap: 12, padding: compact ? 28 : 48, borderRadius: radius.xl, backgroundColor: c.cell, maxWidth: 520, width: '100%' }}>
+              <Icon name={attachmentIcon(path)} size={48} color={c.blueTint} />
+              <Text style={{ fontFamily: font.mono, fontSize: 13, color: c.ink, textAlign: 'center' }}>{basename(path)}</Text>
+              <Text style={t(400, 12.5, 1.4, { color: c.ink3 })}>
+                {attachmentLabel(path)}
+                {node.size ? ` · ${formatSize(node.size)}` : ''}
+              </Text>
+              <Btn
+                variant="primary"
+                icon={download ? 'download' : 'open_in_new'}
+                label={download ? 'Scarica il file' : 'Apri con l’app predefinita'}
+                onPress={open}
+                disabled={opening}
+                style={{ marginTop: 6 }}
+              />
+              <Text style={t(400, 12, 1.5, { color: c.ink3, textAlign: 'center' })}>
+                {download
+                  ? 'Aprilo con Word, Excel, PowerPoint o LibreOffice dopo il download. Le modifiche non tornano su Lore: ricaricalo per salvarle.'
+                  : 'Si apre con Word, Excel, PowerPoint o l’app impostata nel sistema. Quando salvi, le modifiche vengono caricate su Lore da sole.'}
+              </Text>
+            </View>
+          ) : image && !failed ? (
             <img
               src={src}
               alt={basename(path)}

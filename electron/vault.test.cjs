@@ -19,7 +19,11 @@ test('classify: what syncs, what is read-only, what stays local', () => {
     assert.equal(classify(rel).status, 'ignore', rel);
   }
   assert.equal(classify('note.md').status, 'unsynced'); // vault root
-  assert.equal(classify('P/a.docx').status, 'unsynced');
+  // Office: only the OOXML formats; Word's and Excel's lock files never sync.
+  for (const rel of ['P/a.docx', 'P/b.XLSX', 'P/sub/c.pptx']) assert.equal(classify(rel).status, 'sync', rel);
+  for (const rel of ['P/a.doc', 'P/b.xls', 'P/c.ppt', 'P/d.docm']) assert.equal(classify(rel).status, 'unsynced', rel);
+  assert.equal(classify('P/~$a.docx').status, 'ignore');
+  assert.equal(classify('P/big.xlsx', 10 * 1024 * 1024 + 1).status, 'unsynced');
   assert.equal(classify('P/a.md', 2 * 1024 * 1024).status, 'unsynced');
   assert.equal(classify('P/a.png', 2 * 1024 * 1024).status, 'sync');
   assert.equal(classify('-bad/a.md').status, 'unsynced');
@@ -241,6 +245,21 @@ test('engine: first sync downloads everything, index.md read-only, marker writte
   assert.equal(engine.status().state, 'idle');
 });
 
+test('engine: Office files sync both ways as attachments', async (t) => {
+  const { engine, mirror, write, pass, disk } = await setup(t, { 'P/plan.xlsx': 'PK-xlsx' });
+  await engine.start();
+  assert.equal(disk('P/plan.xlsx'), 'PK-xlsx');
+  await write('P/report.docx', 'PK-docx');
+  await write('P/deck.pptx', 'PK-pptx');
+  await write('P/~$report.docx', 'lock'); // Word's lock file while the document is open
+  await pass();
+  assert.equal(mirror.store.get('P/report.docx').data.toString(), 'PK-docx');
+  assert.equal(mirror.store.get('P/deck.pptx').data.toString(), 'PK-pptx');
+  assert.equal(mirror.store.has('P/~$report.docx'), false);
+  assert.deepEqual(mirror.calls.map(([op, rel]) => [op, rel]).sort(), [['putBlob', 'P/deck.pptx'], ['putBlob', 'P/report.docx']]);
+  assert.deepEqual(engine.status().unsynced, []);
+});
+
 test('engine: local edits are pushed with the etag; own writes never echo', async (t) => {
   const { engine, mirror, write, pass, events } = await setup(t, { 'P/a.md': 'one\n' });
   await engine.start();
@@ -401,12 +420,12 @@ test('engine: files that cannot sync are listed with a reason, empty folders rep
   const { engine, write, pass, events, root } = await setup(t, { 'P/a.md': 'a' });
   await engine.start();
   await write('loose.md', 'x');
-  await write('P/doc.docx', 'x');
+  await write('P/doc.doc', 'x');
   await fsp.mkdir(path.join(root, 'P/empty'));
   await pass();
   const reasons = Object.fromEntries(engine.status().unsynced.map((u) => [u.path, u.reason]));
   assert.ok(reasons['loose.md']);
-  assert.ok(reasons['P/doc.docx']);
+  assert.ok(reasons['P/doc.doc']);
   const folders = events.filter((e) => e.type === 'folders').pop();
   assert.deepEqual(folders.dirs, ['P/empty']);
 });

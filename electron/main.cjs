@@ -16,7 +16,8 @@ const { toAgent, toPatch, applyAudit, refOf } = require('./agents.cjs');
 const { createMirror } = require('./mirror.cjs');
 const remote = require('./remote.cjs');
 const { scoped, teamOf, projectOf, checkProjectName, canWrite } = require('./spaces.cjs');
-const { VaultSync, scanVault, planSync, folderNames, kindOf } = require('./vault.cjs');
+const { VaultSync, scanVault, planSync, folderNames, kindOf, conflictName } = require('./vault.cjs');
+const { EditBack } = require('./edit-back.cjs');
 const { VaultGroup, migrateLegacy, overlapping, findMovedProject, rekeyManifestFile } = require('./vaults.cjs');
 const obsidian = require('./obsidian.cjs');
 const background = require('./background.cjs');
@@ -97,8 +98,11 @@ const isMd = (name) => name.toLowerCase().endsWith('.md');
 const isIndex = (rel) => rel.split('/').length === 2 && rel.toLowerCase().endsWith('/index.md');
 const under = (rel, prefix) => rel === prefix || rel.startsWith(prefix + '/');
 
-const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', pdf: 'application/pdf' };
-const mimeOf = (rel) => MIME[rel.slice(rel.lastIndexOf('.') + 1).toLowerCase()];
+// The attachment types the server stores (images, PDF, Office), the same list the upload uses.
+const mimeOf = (rel) => {
+  const ext = upload.extOf(rel);
+  return Object.hasOwn(upload.MIME, ext) ? upload.MIME[ext] : undefined;
+};
 
 function checkFilePath(rel) {
   if (!rel.includes('/')) throw new Error('I file devono stare dentro un progetto');
@@ -1106,7 +1110,7 @@ handle('kb:upload', async (dir, dropped, opts) => {
     const folder = !!opts?.folder;
     const res = await dialog.showOpenDialog(win, folder
       ? { title: 'Carica cartella', properties: ['openDirectory', 'multiSelections'] }
-      : { title: 'Carica file', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Immagini, PDF e note', extensions: upload.PICKER_EXTENSIONS }] });
+      : { title: 'Carica file', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Note, immagini, PDF e file Office', extensions: upload.PICKER_EXTENSIONS }] });
     if (res.canceled) return { uploaded: [], skipped: [] };
     items = [];
     for (const p of res.filePaths) {
@@ -1646,15 +1650,50 @@ handle('obsidian:open', async (rel) => {
 
 handle('obsidian:launch', () => shell.openExternal('obsidian://open'));
 
-// Attachments that the window can't show inline (PDF) open in the system viewer.
+// Attachments that the window can't show inline (PDF, Word, Excel, PowerPoint) open in the
+// system's default app. The vault's own file when there is one (edits there sync back); else a
+// copy downloaded to the temp folder, under a name made safe by openCopyPath. Resolves to
+// shell.openPath's answer: '' when it opened, the system's error message otherwise.
+// Saves made to the temp copy in Word, Excel or PowerPoint are uploaded back (edit-back.cjs).
+const editBack = new EditBack({
+  watch(dir, onEvent) {
+    const w = fs.watch(dir, (_event, filename) => onEvent(filename ? String(filename) : null));
+    w.on('error', () => {});
+    return w;
+  },
+  async putBlob(rel, buffer, opts) {
+    const file = await mirror.putBlob(rel, buffer, opts);
+    resync().catch(() => {});
+    return file;
+  },
+  conflictPath: (rel) => {
+    const taken = mirror.snapshot();
+    return conflictName(rel, 'modifiche locali', new Date(), (p) => taken.has(p));
+  },
+  // The vault's notice channel is the app's generic toast.
+  notify: (message) => send('vault:notice', { message }),
+});
+
 handle('app:openAttachment', async (rel) => {
+  const dir = path.join(app.getPath('temp'), 'lore-attachments');
+  const file = typeof rel === 'string' ? upload.openCopyPath(dir, rel) : null;
+  if (!file) throw new Error('Questo tipo di file non si può aprire');
   const local = vault?.running ? vault.abs(rel) : null;
   if (local && fs.existsSync(local)) return shell.openPath(local);
-  const { buffer } = await mirror.readBlob(rel);
-  const dir = path.join(app.getPath('temp'), 'lore-attachments');
-  await fsp.mkdir(dir, { recursive: true });
-  const file = path.join(dir, path.basename(rel));
-  await fsp.writeFile(file, buffer);
+  // Edits not uploaded yet (offline, server error): reopen them rather than replace them with the server's copy.
+  if (editBack.isDirty(file) && fs.existsSync(file)) return shell.openPath(file);
+  const { buffer, etag } = await mirror.readBlob(rel);
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  let opened = buffer;
+  try {
+    await fsp.writeFile(file, buffer);
+  } catch (err) {
+    // Still open in Word or Excel from last time (locked on Windows): open that copy again.
+    if (!['EBUSY', 'EPERM', 'EACCES'].includes(err?.code) || !fs.existsSync(file)) throw err;
+    opened = null;
+  }
+  // Watched from the bytes written, so opening uploads nothing; a locked copy keeps its watch.
+  if (opened) editBack.track(rel, file, etag, opened);
   return shell.openPath(file);
 });
 
@@ -1725,6 +1764,8 @@ handle('auth:signIn', async (provider) => {
 handle('auth:cancelSignIn', () => auth.cancelSignIn());
 // Local edits still on their way up are flushed first; the vault folder stays on disk.
 handle('auth:signOut', async () => {
+  await editBack.flush().catch(() => {});
+  editBack.stopAll();
   if (vault) {
     await vault.flush({ timeoutMs: 5000 });
     stopVault();
@@ -1816,11 +1857,14 @@ app.whenReady().then(() => {
 let quitting = false;
 app.on('before-quit', (e) => {
   appQuitting = true;
-  if (quitting || !vault) return;
+  if (quitting) return;
   e.preventDefault();
   quitting = true;
-  vault.flush({ timeoutMs: 4000 }).finally(() => {
-    stopVault();
+  const timeout = new Promise((r) => setTimeout(r, 4000));
+  // Office edits still waiting for their debounce go up too (bounded, like the vault).
+  Promise.all([Promise.race([editBack.flush().catch(() => {}), timeout]), vault ? vault.flush({ timeoutMs: 4000 }) : null]).finally(() => {
+    editBack.stopAll();
+    if (vault) stopVault();
     app.quit();
   });
 });

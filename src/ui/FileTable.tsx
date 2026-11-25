@@ -4,6 +4,7 @@ import { c, font, radius, t, web } from '../theme';
 import { useApp } from '../state/app';
 import { editNode, openItemMenu, openRoute } from '../state/actions';
 import { countFiles, fileKind, formatSize, projectLabel, projectOf, relTime } from '../kb/paths';
+import { attachmentIcon } from '../kb/links';
 import type { AgentRef, Author, PendingUpload, TreeNode } from '../kb/types';
 import { eventPoint, Hover, Icon, Progress, useCompact } from './primitives';
 import { AuthorChip } from './identity';
@@ -18,7 +19,7 @@ export function FileIcon({ node, size = 18 }: { node: Pick<TreeNode, 'kind' | 'p
   const k = fileKind(node.path);
   if (k === 'index') return <Icon name="auto_awesome" size={size - 1} color={c.info} />;
   if (k === 'checklist') return <Icon name="checklist" size={size - 1} color={c.purpleTint} />;
-  if (k === 'attachment') return <Icon name={/\.pdf$/i.test(node.path) ? 'picture_as_pdf' : 'image'} size={size - 1} color={c.blueTint} />;
+  if (k === 'attachment') return <Icon name={attachmentIcon(node.path)} size={size - 1} color={c.blueTint} />;
   return <Icon name="description" size={size - 1} color={c.ink3} />;
 }
 

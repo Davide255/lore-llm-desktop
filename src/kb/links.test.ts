@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assetUrl, backlinks, parseWikiLink, resolveHref, resolveWikiTarget, sameHeading, wikiLabel } from './links.ts';
+import { assetUrl, attachmentIcon, attachmentLabel, backlinks, isAttachment, isImage, isOffice, officeKind, parseWikiLink, resolveHref, resolveWikiTarget, sameHeading, wikiLabel } from './links.ts';
+import { fileKind } from './paths.ts';
 
 test('parses wikilinks: alias, heading, block, embed width', () => {
   assert.deepEqual(parseWikiLink('Note'), { target: 'Note' });
@@ -56,4 +57,33 @@ test('backlinks resolve both syntaxes', () => {
 test('asset URLs and heading matching', () => {
   assert.equal(assetUrl('Alpha/img/my photo.png'), 'lore-asset://kb/Alpha/img/my%20photo.png');
   assert.ok(sameHeading('**Next**  steps', 'next steps'));
+});
+
+test('Office files (docx, xlsx, pptx) are attachments; the old binary formats are not', () => {
+  for (const p of ['P/a.docx', 'P/b.XLSX', 'P/c.pptx']) {
+    assert.ok(isAttachment(p), p);
+    assert.ok(isOffice(p), p);
+    assert.ok(!isImage(p), p);
+    assert.equal(fileKind(p), 'attachment', p);
+  }
+  for (const p of ['P/a.doc', 'P/b.xls', 'P/c.ppt', 'P/d.docm', 'P/e.docx.md', 'P/x.constructor']) {
+    assert.ok(!isAttachment(p), p);
+    assert.equal(officeKind(p), null, p);
+  }
+  assert.equal(fileKind('P/e.docx.md'), 'doc');
+  assert.deepEqual(['P/a.docx', 'P/b.xlsx', 'P/c.pptx'].map(officeKind), ['word', 'excel', 'powerpoint']);
+  assert.deepEqual(['P/a.docx', 'P/b.xlsx', 'P/c.pptx', 'P/d.pdf', 'P/e.png'].map(attachmentIcon), ['docs', 'table', 'slideshow', 'picture_as_pdf', 'image']);
+  assert.deepEqual(['P/a.docx', 'P/b.xlsx', 'P/c.pptx', 'P/d.pdf'].map(attachmentLabel), ['Documento Word', 'Foglio Excel', 'Presentazione PowerPoint', 'PDF']);
+});
+
+test('links to Office files resolve to the file, not to a note', () => {
+  const all = [...paths, 'Alpha/docs/Budget 2026.xlsx', 'Alpha/Relazione.docx', 'Beta/Deck.pptx'];
+  assert.equal(resolveWikiTarget('Budget 2026.xlsx', 'Alpha/notes/a.md', all), 'Alpha/docs/Budget 2026.xlsx');
+  assert.equal(resolveWikiTarget('relazione.DOCX', 'Alpha/a.md', all), 'Alpha/Relazione.docx');
+  assert.equal(resolveWikiTarget('Deck.pptx', 'Alpha/a.md', all), 'Beta/Deck.pptx');
+  assert.equal(resolveWikiTarget('Deck.ppt', 'Alpha/a.md', all), null);
+  const exists = (p: string) => all.includes(p);
+  assert.deepEqual(resolveHref('docs/Budget%202026.xlsx', 'Alpha/a.md', exists), { path: 'Alpha/docs/Budget 2026.xlsx', heading: undefined });
+  const index = { 'Alpha/a.md': ['[[Relazione.docx]]'], 'Alpha/notes/b.md': ['../Relazione.docx'] };
+  assert.deepEqual(backlinks('Alpha/Relazione.docx', index, [...all, ...Object.keys(index)]), ['Alpha/a.md', 'Alpha/notes/b.md']);
 });

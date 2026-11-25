@@ -35,7 +35,7 @@ after(async () => {
 });
 
 /** Installs a fake `window.lore`; every call is recorded in `window.__calls`. */
-function fakeBridge({ signedIn, vault = false, ota = null }) {
+function fakeBridge({ signedIn, vault = false, ota = null, extra = [], openResult = '' }) {
   const now = Date.now();
   const claude = { id: 'a-claude', name: 'Claude', kind: 'claude', permission: 'write', scope: ['*'], createdAt: now - 3_600_000 };
   const hunk = (lines) => [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map((l) => `+${l}`) }];
@@ -50,6 +50,8 @@ function fakeBridge({ signedIn, vault = false, ota = null }) {
           { kind: 'file', name: 'Test.md', path: 'Athly/Test.md', mtime: now - 60_000, size: 40, author: 'you' },
           { kind: 'file', name: 'test 1.md', path: 'Athly/test 1.md', mtime: now, size: 60, author: 'agent', agent: { id: 'a-claude', name: 'Claude', kind: 'claude' } },
           { kind: 'file', type: 'attachment', mime: 'image/png', name: 'pic.png', path: 'Athly/pic.png', mtime: now, size: 68, author: 'you' },
+          // Extra files for one test (Office attachments), so the others see the usual tree.
+          ...extra.map((f) => ({ kind: 'file', type: 'attachment', mtime: now, author: 'you', ...f })),
         ],
         project: { key: 'Athly', name: 'Athly', loaded: true, team: null, access: 'owner', fileCount: 4, updatedAt: now, checklist: null },
       },
@@ -201,7 +203,7 @@ function fakeBridge({ signedIn, vault = false, ota = null }) {
     obsidianStatus: rec('obsidianStatus', async (key) => (key ? { ...state.obsidian, registered: !!state.vaultProjects.find((p) => p.key === key)?.registered } : state.obsidian)),
     openInObsidian: rec('openInObsidian', async () => true),
     launchObsidian: rec('launchObsidian', async () => {}),
-    openAttachment: rec('openAttachment', async () => ''),
+    openAttachment: rec('openAttachment', async () => openResult),
     takePendingLink: rec('takePendingLink', async () => null),
     activity: rec('activity', async () => state.activity),
     markActivitySeen: rec('markActivitySeen', async () => now),
@@ -247,11 +249,11 @@ function fakeBridge({ signedIn, vault = false, ota = null }) {
   };
 }
 
-async function open({ signedIn = true, vault = false, ota = null } = {}) {
+async function open({ signedIn = true, vault = false, ota = null, extra = [], openResult = '' } = {}) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(fakeBridge, { signedIn, vault, ota });
+  await page.addInitScript(fakeBridge, { signedIn, vault, ota, extra, openResult });
   await page.goto(url);
   return { page, errors };
 }
@@ -381,6 +383,45 @@ test('attachments open in their own screen', async () => {
   await page.getByText('Usato in').waitFor();
   await page.getByText('Apri', { exact: true }).click();
   assert.deepEqual(await calls(page, 'openAttachment'), [['Athly/pic.png']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+const OFFICE_FILES = [
+  { name: 'Relazione.docx', path: 'Athly/Relazione.docx', size: 24_576, mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+  { name: 'Budget.xlsx', path: 'Athly/Budget.xlsx', size: 8_192, mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  { name: 'Deck.pptx', path: 'Athly/Deck.pptx', size: 1_048_576, mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+];
+
+test('Office attachments: listed with their icon, a card with "Apri con l’app predefinita" that calls the bridge', async () => {
+  const { page, errors } = await open({ extra: OFFICE_FILES });
+  await page.getByText('Athly', { exact: true }).first().click();
+  for (const [name, icon] of [['Relazione.docx', 'docs'], ['Budget.xlsx', 'table'], ['Deck.pptx', 'slideshow']]) {
+    const row = page.getByText(name, { exact: true }).first();
+    await row.waitFor();
+    // The icon glyph (a ligature) sits next to the name in the sidebar row.
+    assert.equal(await row.locator('xpath=..').getByText(icon, { exact: true }).count(), 1, `${name} shows ${icon}`);
+  }
+  await page.getByText('Budget.xlsx', { exact: true }).first().click();
+  await page.getByText('Foglio Excel · 8,0 kB', { exact: false }).first().waitFor();
+  await shot(page, '7b-office-attachment');
+  await page.getByText('Apri con l’app predefinita', { exact: true }).click();
+  assert.deepEqual(await calls(page, 'openAttachment'), [['Athly/Budget.xlsx']]);
+  // The top bar's "Apri" does the same.
+  await page.getByText('Apri', { exact: true }).click();
+  assert.deepEqual(await calls(page, 'openAttachment'), [['Athly/Budget.xlsx'], ['Athly/Budget.xlsx']]);
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('Office attachments: the system\'s error when no app opens the file is shown', async () => {
+  const { page, errors } = await open({ extra: OFFICE_FILES, openResult: 'Nessuna applicazione associata' });
+  await page.getByText('Athly', { exact: true }).first().click();
+  await page.getByText('Relazione.docx', { exact: true }).first().click();
+  await page.getByText('Documento Word', { exact: false }).first().waitFor();
+  await page.getByText('Apri con l’app predefinita', { exact: true }).click();
+  await page.getByText('Impossibile aprire l’allegato: Nessuna applicazione associata').waitFor();
+  assert.deepEqual(await calls(page, 'openAttachment'), [['Athly/Relazione.docx']]);
   assert.deepEqual(errors, []);
   await page.close();
 });

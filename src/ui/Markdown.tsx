@@ -4,7 +4,7 @@ import { Lexer, Marked, type Token, type Tokens } from 'marked';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import { c, font, radius, t, web } from '../theme';
-import { assetUrl, isImage, parseWikiLink, wikiLabel } from '../kb/links';
+import { assetUrl, attachmentIcon, isImage, isOffice, isPdf, parseWikiLink, wikiLabel } from '../kb/links';
 import { lore } from '../kb/bridge';
 import { Icon } from './primitives';
 
@@ -486,7 +486,7 @@ function InlineToken({ tok, ...p }: { tok: Token } & MarkdownProps): React.React
               : { color: c.purpleTint, cursor: 'pointer' },
           )}
         >
-          {wt.embed ? <Icon name={target && /\.pdf$/i.test(target) ? 'picture_as_pdf' : 'subdirectory_arrow_right'} size={14} color={missing ? c.ink3 : c.purpleTint} /> : null}
+          {wt.embed ? <Icon name={target && (isPdf(target) || isOffice(target)) ? attachmentIcon(target) : 'subdirectory_arrow_right'} size={14} color={missing ? c.ink3 : c.purpleTint} /> : null}
           {wikiLabel(w) || wt.inner}
         </Text>
       );

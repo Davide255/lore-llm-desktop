@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { planUpload, cleanName, uniqueName, walkFolder } = require('./upload.cjs');
+const { planUpload, cleanName, uniqueName, walkFolder, openCopyPath, MIME, PICKER_EXTENSIONS } = require('./upload.cjs');
 
 const none = () => false;
 
@@ -12,6 +12,75 @@ test('accepts images, pdf and notes', () => {
   const { ok, skipped } = planUpload('P/docs', [{ name: 'a.PNG', size: 10 }, { name: 'b.pdf', size: 10 }, { name: 'c.md', size: 10 }], none);
   assert.deepEqual(ok.map((o) => o.rel), ['P/docs/a.PNG', 'P/docs/b.pdf', 'P/docs/c.md']);
   assert.equal(skipped.length, 0);
+});
+
+test('accepts Word, Excel and PowerPoint (OOXML only) with their MIME types', () => {
+  const { ok, skipped } = planUpload('P', [
+    { name: 'Relazione.docx', size: 10 },
+    { name: 'Budget.XLSX', size: 10 },
+    { name: 'Deck.pptx', size: 10 * 1024 * 1024 },
+    { name: 'old.doc', size: 10 },
+    { name: 'old.xls', size: 10 },
+    { name: 'old.ppt', size: 10 },
+    { name: 'macro.docm', size: 10 },
+    { name: 'huge.pptx', size: 10 * 1024 * 1024 + 1 },
+  ], none);
+  assert.deepEqual(ok.map((o) => o.rel), ['P/Relazione.docx', 'P/Budget.XLSX', 'P/Deck.pptx']);
+  assert.deepEqual(skipped.map((s) => [s.name, s.reason]), [
+    ['old.doc', 'Tipo non supportato (ammessi: note .md, immagini PNG, JPG, GIF, WebP, SVG, PDF e file Office DOCX, XLSX, PPTX)'],
+    ['old.xls', 'Tipo non supportato (ammessi: note .md, immagini PNG, JPG, GIF, WebP, SVG, PDF e file Office DOCX, XLSX, PPTX)'],
+    ['old.ppt', 'Tipo non supportato (ammessi: note .md, immagini PNG, JPG, GIF, WebP, SVG, PDF e file Office DOCX, XLSX, PPTX)'],
+    ['macro.docm', 'Tipo non supportato (ammessi: note .md, immagini PNG, JPG, GIF, WebP, SVG, PDF e file Office DOCX, XLSX, PPTX)'],
+    ['huge.pptx', 'Più grande di 10 MB'],
+  ]);
+  assert.equal(MIME.docx, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  assert.equal(MIME.xlsx, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  assert.equal(MIME.pptx, 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  for (const ext of ['docx', 'xlsx', 'pptx']) assert.ok(PICKER_EXTENSIONS.includes(ext), ext);
+  for (const ext of ['doc', 'xls', 'ppt']) assert.ok(!PICKER_EXTENSIONS.includes(ext), ext);
+});
+
+test('a folder upload takes Office files too', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'lore-upload-office-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  await fsp.mkdir(path.join(root, 'docs'));
+  await fsp.writeFile(path.join(root, 'docs', 'a.docx'), 'PK');
+  await fsp.writeFile(path.join(root, 'docs', 'b.xls'), 'x');
+  const items = await walkFolder(path.join(root, 'docs'), fsp);
+  const { ok, skipped } = planUpload('P', items, none);
+  assert.deepEqual(ok.map((o) => o.rel), ['P/docs/a.docx']);
+  assert.deepEqual(skipped.map((s) => s.name), ['docs/b.xls']);
+});
+
+test('openCopyPath: one safe file name per attachment, inside the given folder', () => {
+  const dir = path.join(os.tmpdir(), 'lore-attachments');
+  const inside = (file) => path.dirname(path.dirname(file)) === dir;
+  const name = (rel) => path.basename(openCopyPath(dir, rel));
+  // The attachment's own name, in a folder of its own.
+  const a = openCopyPath(dir, 'P/notes/Relazione finale.docx');
+  assert.ok(inside(a));
+  assert.equal(path.basename(a), 'Relazione finale.docx');
+  assert.equal(openCopyPath(dir, 'P/notes/Relazione finale.docx'), a, 'stable for the same file');
+  assert.notEqual(path.dirname(openCopyPath(dir, 'P/other/Relazione finale.docx')), path.dirname(a), 'same name elsewhere: another folder');
+  // Never outside `dir`, whatever the path says.
+  for (const rel of ['P/../../etc/passwd.xlsx', '../../x.pptx', 'P/a\\..\\..\\..\\evil.docx', '/abs/olute.docx', 'C:\\Windows\\x.docx', 'P/..docx', 'P/.. .pptx']) {
+    const f = openCopyPath(dir, rel);
+    assert.ok(f && inside(f), rel);
+    assert.ok(!path.basename(f).startsWith('.'), rel);
+  }
+  assert.equal(name('P/../../etc/passwd.xlsx'), 'passwd.xlsx');
+  assert.equal(name('P/..docx'), 'allegato.docx');
+  // Characters and names Windows refuses; the extension is kept (lower case).
+  assert.equal(name('P/scan: 1?*<>|".PDF'), 'scan 1.pdf');
+  assert.equal(name('P/CON.docx'), '_CON.docx');
+  assert.equal(name('P/lpt1.xlsx'), '_lpt1.xlsx');
+  assert.equal(name('P/name. . .pptx'), 'name.pptx');
+  const long = name(`P/${'x'.repeat(300)}.pptx`);
+  assert.ok(long.length <= 120 && long.endsWith('.pptx'));
+  // Only the types the server stores are ever handed to the system.
+  for (const rel of ['P/setup.exe', 'P/run.bat', 'P/link.lnk', 'P/old.doc', 'P/noext', 'P/x.constructor', 'P/a.docx.', 'P/script.docx.js']) {
+    assert.equal(openCopyPath(dir, rel), null, rel);
+  }
 });
 
 test('refuses types the server does not store, empty and oversized files', () => {

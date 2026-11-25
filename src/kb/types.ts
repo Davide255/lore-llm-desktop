@@ -401,7 +401,11 @@ export interface LoreBridge {
   launchObsidian(): Promise<void>;
   /** Puts files from the user's disk into `dir`: the ones given, or picked with the system dialog when none. */
   upload(dir: string, files?: UploadFile[], opts?: { folder?: boolean }): Promise<UploadResult>;
-  /** Opens an attachment in the system viewer. */
+  /**
+   * Opens an attachment with the system's default app (PDF viewer, Word, Excel, PowerPoint…).
+   * Resolves to '' when it opened, or to the system's error message. The browser build shows
+   * images and PDFs in a new tab and downloads Office files.
+   */
   openAttachment(path: string): Promise<string>;
   /** Browser build only: a URL the page can load an attachment from. Electron serves lore-asset:// instead. */
   assetUrl?(path: string): Promise<string>;
